@@ -1,0 +1,4 @@
+github.com/cocoonlife/testify v0.0.0-20160218172820-792cc1faeb64 h1:LjPYdzoFSAJ5Tr/ElL8kzTJghXgpnOjJVbgd1UvZB1o=
+github.com/cocoonlife/testify v0.0.0-20160218172820-792cc1faeb64/go.mod h1:LoCAz53rbPcqs8Da2BjB/yDy4gxMtiSQmqnYI/DGH+U=
+github.com/ecobee/goalsa v0.0.0-20230731174733-19b297509b2e h1:mkBm6H4+ZVVt3N+H0PF6TqUiF8PIqz3FS4BcoUdzSO4=
+github.com/ecobee/goalsa v0.0.0-20230731174733-19b297509b2e/go.mod h1:OOww1Buk6n2cnLoXYxtVzrAS5v+fZ54bd+1ZdvDNSOU=
