@@ -2,3 +2,5 @@ github.com/cocoonlife/testify v0.0.0-20160218172820-792cc1faeb64 h1:LjPYdzoFSAJ5
 github.com/cocoonlife/testify v0.0.0-20160218172820-792cc1faeb64/go.mod h1:LoCAz53rbPcqs8Da2BjB/yDy4gxMtiSQmqnYI/DGH+U=
 github.com/ecobee/goalsa v0.0.0-20230731174733-19b297509b2e h1:mkBm6H4+ZVVt3N+H0PF6TqUiF8PIqz3FS4BcoUdzSO4=
 github.com/ecobee/goalsa v0.0.0-20230731174733-19b297509b2e/go.mod h1:OOww1Buk6n2cnLoXYxtVzrAS5v+fZ54bd+1ZdvDNSOU=
+github.com/nathan-hello/goalsa v0.0.0-20240721232453-2b6b84c2b478 h1:1y/UyCChMo263SAPdYbPJBl8hVOJoMQjxRGBlTZqV5E=
+github.com/nathan-hello/goalsa v0.0.0-20240721232453-2b6b84c2b478/go.mod h1:Sd+5sfElde8QbzQxGu976a8DoLobtr1RQZdUHARNWdY=
