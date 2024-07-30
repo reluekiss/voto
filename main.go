@@ -3,12 +3,13 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
 
 	alsa "github.com/cocoonlife/goalsa"
-	opus "github.com/hraban/opus"
+	opus "gopkg.in/hraban/opus.v2"
 )
 
 /* cmd := exec.Command("arecord", "--dump-hw-params")
@@ -33,7 +34,7 @@ if {
 } else {
 	format = alsa.FormatSXXBE
 } */
-func captureaudio() []int16 {
+func captureaudio(reader io.Reader) ([]int16, error) {
     c, err := alsa.NewCaptureDevice("default", 2, alsa.FormatS16LE, 48000, alsa.BufferParams{})
     if err != nil {
 	log.Fatal(err)
@@ -50,10 +51,11 @@ func captureaudio() []int16 {
         log.Fatal(err)
     }
     enc.SetBitrate(48000)
-
-    var samples, returnBuffer []int16
-    buffer := make([]byte, 2048)
-    r := bufio.NewReader(os.Stdin)
+    
+    samples := make([]int16, 100000)
+    var returnBuffer []int16
+    buffer := make([]byte, 1000)
+    r := bufio.NewReader(reader)
     
     for {
 	input, _ := r.ReadString('\n')
@@ -63,39 +65,46 @@ func captureaudio() []int16 {
             break
         }
 
+	fmt.Printf("Started recording with device %#v\n", c)
 	_, err = c.Read(samples)
     	if err != nil {
 	    fmt.Println("Error reading from capture device:", err)
 	    break
 	}
 
-	_, err := enc.EncodeSamples(samples, len(samples), buffer)
+	frameSize := len(samples)
+    	frameSizeMs := float32(frameSize) / 2 * 1000 / 48000 
+    	switch frameSizeMs {
+    	case 2.5, 5, 10, 20, 40, 60:
+    	default:
+    	    return nil, fmt.Errorf("illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
+    	}
+
+	_, err := enc.Encode(samples, buffer)
         if err != nil {
             log.Fatal(err)
         }
 	returnBuffer = append(returnBuffer, samples...)
     }
-    return returnBuffer
+    fmt.Printf("Stopped recording, len(returnBuffer)=%d\n", len(returnBuffer))
+    return returnBuffer, nil
 }
 
 func playaudio(recordBuffer []int16) {
-    var length int
-    
     p, err := alsa.NewPlaybackDevice("default", 2, alsa.FormatS16LE, 48000, alsa.BufferParams{})
     if err != nil {
 	log.Fatal(err)
     }
     defer p.Close()
     
-    dec, err := opus.NewOpusDecoder(48000, 2, 20)
+    dec, err := opus.NewDecoder(48000, 2)
     if err != nil {
         log.Fatal(err)
     }
-    defer dec.Close()
     
    var buffer []byte 
    for {
-   	_, err := dec.Decode(buffer[:length])
+   	_, err := dec.Decode(buffer, recordBuffer)
    	if err != nil {
    	    log.Fatal(err)
    	}
@@ -108,15 +117,25 @@ func playaudio(recordBuffer []int16) {
 
 func main() {
     var samples []int16
-    r := bufio.NewReader(os.Stdin)
+    reader := os.Stdin
+    r := bufio.NewReader(reader)
     
     for {
 	input, _ := r.ReadString('\n')
         input = strings.TrimSpace(input)
 
         if string(input[0]) == "w" {
-	    samples = captureaudio()
+	    println("Started recording.")
+	    s, err := captureaudio(reader)
+	    if err != nil {
+    	        log.Fatal(err)
+    	    }
+	    samples = s
+	    fmt.Printf("Got samples back, len(samples)=%d\n", len(samples))
         }
-    	playaudio(samples)
+    	if len(samples) != 0 {
+	    fmt.Println("Playing back audio")
+	    playaudio(samples)
+	}
     }
 }
