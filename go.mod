@@ -6,6 +6,7 @@ require (
 	github.com/cocoonlife/goalsa v0.0.0-20230731174733-19b297509b2e // indirect
 	github.com/cocoonlife/testify v0.0.0-20160218172820-792cc1faeb64 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
+	github.com/hraban/opus v0.0.0-20230925203106-0188a62cb302 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
 	github.com/tj/go-spin v1.1.0 // indirect
 	github.com/xlab/c-for-go v1.2.0 // indirect

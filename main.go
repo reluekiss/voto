@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	alsa "github.com/cocoonlife/goalsa"
-	opus "github.com/reluekiss/voto"
+	opus "github.com/hraban/opus"
 )
 
 /* cmd := exec.Command("arecord", "--dump-hw-params")
@@ -45,11 +45,11 @@ func captureaudio() []int16 {
 	log.Fatal(err)
     }
     
-    enc, err := opus.NewOpusEncoder(48000, 2, 20, 2)
+    enc, err := opus.NewEncoder(48000, 2, opus.AppVoIP)
     if err != nil {
         log.Fatal(err)
     }
-    defer enc.Close()
+    enc.SetBitrate(48000)
 
     var samples, returnBuffer []int16
     buffer := make([]byte, 2048)
