@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
         static time_t last = 0;
         time_t now = time(NULL);
         if (now - last >= 1) {
-            // drawVisualization();
+            drawVisualization();
             last = now;
         }
         // for (int i = 0; i < MAX_PEERS; i++) {
@@ -339,7 +339,7 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 f
             memset(dst + offsetSamples, 0, zeroBytes);
         }
     }
-    fprintf(stderr, "[D] ma_callback frameCount=%u\n", frameCount);
+    // fprintf(stderr, "[D] ma_callback frameCount=%u\n", frameCount);
 }
 
 static bool initAudioDevice(void) {
@@ -691,7 +691,7 @@ static void processAudioIO(void) {
     rb_read_exact(&audioCtx.captureRB, fbuf, frameBytes);
 
     {
-        ma_uint32 wAvail;
+        size_t    wAvail;
         void      *wPtr;
         ma_rb_acquire_write(&audioCtx.playbackRB, &wAvail, &wPtr);
         if (wAvail >= frameBytes) {
@@ -708,9 +708,9 @@ static void processAudioIO(void) {
 
     int nb = opus_encode(opusEnc, pcmBuf, FRAME_SIZE, netBuf + 1, MAX_PACKET_SIZE - 1);
 
-    fprintf(stderr, "[D] opus_encode -> %d bytes\n", nb);
-    fflush(stderr);
-
+    // fprintf(stderr, "[D] opus_encode -> %d bytes\n", nb);
+    // fflush(stderr);
+    //
     if (nb > 0) {
         netBuf[0] = PACKET_AUDIO;
         broadcastAudioToPeers(netBuf, nb + 1);
