@@ -712,10 +712,10 @@ static void processAudioIO(void) {
   if (avail < FRAME_SIZE * sizeof(float)) {
     static int once = 0;
     if (!once++)
-      fprintf(stderr, "[AUDIO] ring %u\n", avail);
+      // fprintf(stderr, "[AUDIO] ring %u\n", avail);
     return;
   }
-  fprintf(stderr, "[AUDIO] ring %u\n", avail);
+  // fprintf(stderr, "[AUDIO] ring %u\n", avail);
 
   size_t rS;
   void *rP;
