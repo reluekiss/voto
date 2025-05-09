@@ -185,11 +185,10 @@ int main(int argc, char **argv) {
             drawVisualization();
             last = now;
         }
-        for (int i = 0; i < MAX_PEERS; i++) {
-            Peer *p = &netState.peers[i];
-            fprintf(stderr, "[DEBUG] Peer %d: %s:%d state=%d\n", i, p->address,
-                            p->port, p->state);
-        }
+        // for (int i = 0; i < MAX_PEERS; i++) {
+        //     Peer *p = &netState.peers[i];
+        //     fprintf(stderr, "[DEBUG] Peer %d: %s:%d state=%d\n", i, p->address, p->port, p->state);
+        // }
         usleep(10000);
     }
 
