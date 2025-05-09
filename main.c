@@ -28,8 +28,8 @@
 // Config
 //--------------------------------------------------------------------------------------
 #define SAMPLE_RATE 48000
-#define CAPTURE_CHANNELS 2  // stereo capture
-#define PLAYBACK_CHANNELS 1 // mono playback
+#define CAPTURE_CHANNELS 2
+#define PLAYBACK_CHANNELS 2
 #define FRAME_SIZE 960
 #define MAX_PACKET_SIZE 4000
 #define DEFAULT_PORT 14400
@@ -60,7 +60,7 @@ typedef struct {
   int socketFd;
   SSL *ssl;
   PeerState state;
-  bool counted; // have we incremented peerCount?
+  bool counted;
   time_t lastActivity;
   float audioLevel;
   uint64_t bytesSent, bytesReceived;
@@ -138,6 +138,10 @@ static opus_int16 *pcmBuf = NULL;    // FRAME_SIZE
 int main(int argc, char **argv) {
   int port = DEFAULT_PORT;
 
+  // peer slots
+  initializePeers();
+  coroutine_init();
+
   // parse args
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-p") && i + 1 < argc) {
@@ -183,10 +187,6 @@ int main(int argc, char **argv) {
     opus_encoder_ctl(opusEnc, OPUS_SET_BITRATE(64000));
   }
 
-  // peer slots
-  initializePeers();
-  coroutine_init();
-
   // server + discovery
   if (!startServer(port))
     return 1;
@@ -207,6 +207,10 @@ int main(int argc, char **argv) {
     if (now - last >= 1) {
       drawVisualization();
       last = now;
+    }
+    for (int i=0;i<MAX_PEERS;i++) {
+        Peer *p = &netState.peers[i];
+        fprintf(stderr, "[DEBUG] Peer %d: %s:%d state=%d\n", i, p->address, p->port, p->state);
     }
     usleep(10000);
   }
@@ -348,23 +352,32 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 f
   }
 
   // 2) PLAYBACK half (called when out_ != NULL)
-  if (out_) {
+if (out_) {
     float      *dst    = (float*)out_;
     ma_uint32   rAvail = ma_rb_available_read(&ctx->playbackRB);
+
     if (rAvail >= bytes) {
       void   *rPtr;
       size_t  rSize;
       ma_rb_acquire_read(&ctx->playbackRB, &rSize, &rPtr);
+
       if (rSize >= bytes) {
-        memcpy(dst, rPtr, bytes);
+        float *src = (float*)rPtr;
+        // duplicate each sample into L+R
+        for (ma_uint32 i = 0; i < frameCount; ++i) {
+          float s = src[i];
+          dst[2*i    ] = s;
+          dst[2*i + 1] = s;
+        }
         ma_rb_commit_read(&ctx->playbackRB, bytes);
       } else {
         ma_rb_commit_read(&ctx->playbackRB, 0);
-        memset(dst, 0, bytes);
+        // underflow → silence on both channels
+        memset(dst, 0, frameCount * PLAYBACK_CHANNELS * sizeof(float));
       }
     } else {
-      // underflow → silence
-      memset(dst, 0, bytes);
+      // total underflow → silence on both channels
+      memset(dst, 0, frameCount * PLAYBACK_CHANNELS * sizeof(float));
     }
   }
 }
