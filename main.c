@@ -337,7 +337,6 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 f
       if (wSize >= bytes) {
         float *dest = (float*)wPtr;
         if (dev->capture.channels == 2) {
-          // down-mix stereo → mono directly into the ring
           for (ma_uint32 i = 0; i < frameCount; ++i) {
             dest[i] = 0.5f*(src[2*i] + src[2*i+1]);
           }
@@ -363,7 +362,6 @@ if (out_) {
 
       if (rSize >= bytes) {
         float *src = (float*)rPtr;
-        // duplicate each sample into L+R
         for (ma_uint32 i = 0; i < frameCount; ++i) {
           float s = src[i];
           dst[2*i    ] = s;
@@ -372,11 +370,9 @@ if (out_) {
         ma_rb_commit_read(&ctx->playbackRB, bytes);
       } else {
         ma_rb_commit_read(&ctx->playbackRB, 0);
-        // underflow → silence on both channels
         memset(dst, 0, frameCount * PLAYBACK_CHANNELS * sizeof(float));
       }
     } else {
-      // total underflow → silence on both channels
       memset(dst, 0, frameCount * PLAYBACK_CHANNELS * sizeof(float));
     }
   }
@@ -563,6 +559,11 @@ static void connectToPeerCoroutine(void *arg) {
   SSL_set_fd(p->ssl, p->socketFd);
   do {
     r = SSL_connect(p->ssl);
+    unsigned char hello[3];
+    hello[0] = PACKET_HELLO;
+    hello[1] = (myPort >> 8) & 0xFF;
+    hello[2] =  myPort       & 0xFF;
+    SSL_write(p->ssl, hello, 3);
     if (r <= 0) {
       int e = SSL_get_error(p->ssl, r);
       if (e == SSL_ERROR_WANT_READ)
@@ -622,6 +623,17 @@ static void handlePeerCoroutine(void *arg) {
     coroutine_sleep_read(p->socketFd);
     unsigned char *nb = netBuf;
     int n = SSL_read(p->ssl, nb, MAX_PACKET_SIZE);
+    if (n >= 3 && nb[0] == PACKET_HELLO) {
+      int theirPort = (nb[1]<<8)|(nb[2]&0xFF);
+      if (isPeerConnected(p->address, theirPort)) {
+        goto cleanup;
+      }
+      p->port = theirPort;
+      unsigned char ack[3] = { PACKET_HELLO_ACK, (myPort>>8)&0xFF, myPort&0xFF };
+      SSL_write(p->ssl, ack, 3);
+      sendPeerList(p);
+      continue;
+    }
     if (n <= 0) {
       int e = SSL_get_error(p->ssl, n);
       if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE)
@@ -695,11 +707,12 @@ static void discoveryCoroutine(void *arg) {
           int pr = atoi(c + 1);
           char sip[MAX_ADDR_STR];
           inet_ntop(AF_INET, &sa.sin_addr, sip, MAX_ADDR_STR);
-          if (strcmp(sip, myAddress) || pr != myPort) {
-            if (!isPeerConnected(ipp, pr)) {
-              fprintf(stderr, "[DISC] %s:%d\n", ipp, pr);
-              addPeer(ipp, pr);
-            }
+          if (strcmp(sip, myAddress)==0 && pr == myPort) {
+            continue;
+          }
+          if (!isPeerConnected(ipp, pr)) {
+            fprintf(stderr, "[DISC] %s:%d\n", ipp, pr);
+            addPeer(ipp, pr);
           }
         }
       }
@@ -882,6 +895,9 @@ static void handlePeerList(Peer *p, const char *data, int len) {
       continue;
     *c = 0;
     int pr = atoi(c + 1);
+    if (strcmp(tok, myAddress)==0 && pr == myPort) {
+      continue;
+    }
     if (!isPeerConnected(tok, pr))
       addPeer(tok, pr);
   }
