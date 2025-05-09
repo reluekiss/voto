@@ -183,6 +183,10 @@ int main(int argc, char **argv) {
             drawVisualization();
             last = now;
         }
+        for (int i = 0; i < MAX_PEERS; i++) {
+            Peer *p = &netState.peers[i];
+            fprintf(stderr, "[DEBUG] Peer IP: %s:%d, State: %d", p->address, p->port, p->state);
+        }
         usleep(10000);
     }
 
@@ -279,13 +283,12 @@ static void cleanupSSL(void) {
     EVP_cleanup();
 }
 
-static void ma_callback(ma_device *dev, void *out_, const void *in_,
-                                                ma_uint32 frameCount) {
+static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 frameCount) {
     AudioContext *ctx = (AudioContext *)dev->pUserData;
-    size_t bytes = frameCount * sizeof(float);
 
     if (in_) {
         const float *src = (const float *)in_;
+        size_t bytes = frameCount * sizeof(float);
         ma_uint32 wAvail = ma_rb_available_write(&ctx->captureRB);
         if (wAvail >= bytes) {
             void *wPtr;
@@ -309,27 +312,31 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_,
 
     if (out_) {
         float *dst = (float *)out_;
-        ma_uint32 rAvail = ma_rb_available_read(&ctx->playbackRB);
+        const size_t sampleSize = sizeof(float);
 
-        if (rAvail >= bytes) {
+        ma_uint32 availBytes = ma_rb_available_read(&ctx->playbackRB);
+        ma_uint32 availFrames = availBytes / sampleSize;
+        ma_uint32 toCopyFrames = availFrames < frameCount ? availFrames : frameCount;
+        size_t toCopyBytes = toCopyFrames * sampleSize;
+
+        if (toCopyBytes > 0) {
             void *rPtr;
             size_t rSize;
             ma_rb_acquire_read(&ctx->playbackRB, &rSize, &rPtr);
-
-            if (rSize >= bytes) {
-                float *src = (float *)rPtr;
-                for (ma_uint32 i = 0; i < frameCount; ++i) {
-                    float s = src[i];
-                    dst[2 * i] = s;
-                    dst[2 * i + 1] = s;
-                }
-                ma_rb_commit_read(&ctx->playbackRB, bytes);
-            } else {
-                ma_rb_commit_read(&ctx->playbackRB, 0);
-                memset(dst, 0, frameCount * PLAYBACK_CHANNELS * sizeof(float));
+            size_t actuallyCopied = rSize < toCopyBytes ? rSize : toCopyBytes;
+            float *src = (float *)rPtr;
+            for (ma_uint32 i = 0; i < actuallyCopied / sampleSize; ++i) {
+                float s = src[i];
+                dst[2 * i] = s;
+                dst[2 * i + 1] = s;
             }
-        } else {
-            memset(dst, 0, frameCount * PLAYBACK_CHANNELS * sizeof(float));
+            ma_rb_commit_read(&ctx->playbackRB, actuallyCopied);
+        }
+
+        if (toCopyFrames < frameCount) {
+            size_t offsetSamples = PLAYBACK_CHANNELS * toCopyFrames;
+            size_t zeroBytes = (frameCount - toCopyFrames) * PLAYBACK_CHANNELS * sampleSize;
+            memset(dst + offsetSamples, 0, zeroBytes);
         }
     }
 }
@@ -354,6 +361,7 @@ static bool initAudioDevice(void) {
 
     ma_device_config cfg = ma_device_config_init(ma_device_type_duplex);
     cfg.sampleRate = SAMPLE_RATE;
+    cfg.periodSizeInFrames = FRAME_SIZE;
     cfg.capture.format = ma_format_f32;
     cfg.playback.format = ma_format_f32;
     cfg.capture.channels = CAPTURE_CHANNELS;
@@ -490,7 +498,7 @@ static void connectToPeerCoroutine(void *arg) {
         goto fail;
     if (r < 0) {
         coroutine_sleep_write(p->socketFd);
-        int e, el = sizeof e;
+        socklen_t e, el = sizeof e;
         if (getsockopt(p->socketFd, SOL_SOCKET, SO_ERROR, &e, &el) < 0 || e)
             goto fail;
     }
@@ -691,6 +699,7 @@ static void processAudioIO(void) {
 
     netBuf[0] = PACKET_AUDIO;
     int nb = opus_encode(opusEnc, pcmBuf, FRAME_SIZE, netBuf + 1, MAX_PACKET_SIZE - 1);
+    fprintf(stderr, "[DEBUG]: opus packet size: %d", nb);
     if (nb > 0)
         broadcastAudioToPeers(netBuf, nb + 1);
 }
