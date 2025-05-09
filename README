@@ -1,0 +1,3 @@
+fix multiple instances of self
+
+actually determine if audio works when clients connect (it should??)
