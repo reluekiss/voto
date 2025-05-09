@@ -92,6 +92,7 @@ static OpusDecoder *opusDec = NULL;
 static char  myAddress[MAX_ADDR_STR] = {0};
 static int   myPort = DEFAULT_PORT;
 static bool  isRunning = true;
+static float monoBuf[FRAME_SIZE];
 
 // Forward declarations
 static void signalHandler(int sig);
@@ -291,38 +292,50 @@ static void cleanupSSL(void){
 //--------------------------------------------------------------------------------------
 // miniaudio callback: capture→ring, ring→playback
 //--------------------------------------------------------------------------------------
-static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 fc){
+static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 frameCount) {
     AudioContext *ctx = dev->pUserData;
     const float *in = (const float*)in_;
-    float mono[FRAME_SIZE];
+    float *mono = monoBuf;  // use the static buffer
 
-    // downmix stereo→mono
-    if(dev->capture.channels==2){
-        for(ma_uint32 i=0;i<fc;i++)
-            mono[i] = 0.5f*(in[2*i]+in[2*i+1]);
+    // Downmix stereo -> mono if capture.channels == 2
+    if (dev->capture.channels == 2) {
+        for (ma_uint32 i = 0; i < frameCount; ++i) {
+            mono[i] = 0.5f * (in[2*i] + in[2*i + 1]);
+        }
         in = mono;
     }
 
-    // capture→ring
+    // Write captured samples into the ring
     ma_uint32 wAvail = ma_rb_available_write(&ctx->captureRB);
-    size_t    wBytes = fc * sizeof(float);
-    if(wAvail >= wBytes){
-        void *wp; size_t ws;
-        ma_rb_acquire_write(&ctx->captureRB,&ws,&wp);
-        memcpy(wp,in,wBytes);
-        ma_rb_commit_write(&ctx->captureRB,wBytes);
+    size_t    wBytes = frameCount * sizeof(float);
+    if (wAvail >= wBytes) {
+        void   *writePtr;
+        size_t  writeSize;
+        ma_rb_acquire_write(&ctx->captureRB, &writeSize, &writePtr);
+        if (writeSize >= wBytes) {
+            memcpy(writePtr, in, wBytes);
+            ma_rb_commit_write(&ctx->captureRB, wBytes);
+        } else {
+            ma_rb_commit_write(&ctx->captureRB, 0);
+        }
     }
 
-    // ring→playback
+    // Read playback samples from the ring
     ma_uint32 rAvail = ma_rb_available_read(&ctx->playbackRB);
-    size_t    rBytes = fc * sizeof(float);
-    if(rAvail >= rBytes){
-        void *rp; size_t rs;
-        ma_rb_acquire_read(&ctx->playbackRB,&rs,&rp);
-        memcpy(out_,rp,rBytes);
-        ma_rb_commit_read(&ctx->playbackRB,rBytes);
+    size_t    rBytes = frameCount * sizeof(float);
+    if (rAvail >= rBytes) {
+        void   *readPtr;
+        size_t  readSize;
+        ma_rb_acquire_read(&ctx->playbackRB, &readSize, &readPtr);
+        if (readSize >= rBytes) {
+            memcpy(out_, readPtr, rBytes);
+            ma_rb_commit_read(&ctx->playbackRB, rBytes);
+        } else {
+            ma_rb_commit_read(&ctx->playbackRB, 0);
+        }
     } else {
-        memset(out_,0,rBytes);
+        // Underflow → output silence
+        memset(out_, 0, rBytes);
     }
 }
 
