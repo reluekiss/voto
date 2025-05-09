@@ -39,7 +39,6 @@
 #define MAX_PEERS 16
 #define MAX_ADDR_STR 64
 
-// Packet IDs
 typedef enum {
     PACKET_AUDIO = 0,
     PACKET_PEER_LIST = 1,
@@ -47,14 +46,12 @@ typedef enum {
     PACKET_HELLO_ACK = 3
 } PacketType;
 
-// Peer state
 typedef enum {
     PEER_DISCONNECTED = 0,
     PEER_CONNECTING,
     PEER_CONNECTED
 } PeerState;
 
-// Peer data
 typedef struct {
     char address[MAX_ADDR_STR];
     int port;
@@ -66,9 +63,9 @@ typedef struct {
     float audioLevel;
     uint64_t bytesSent, bytesReceived;
     bool audioDetected;
+    bool isClient;
 } Peer;
 
-// Network state
 typedef struct {
     int listenFd;
     int discoverySocket;
@@ -78,7 +75,6 @@ typedef struct {
 } NetworkState;
 static NetworkState netState = {0};
 
-// Audio context (miniaudio & ring buffers)
 typedef struct {
     ma_device device;
     ma_rb captureRB;
@@ -88,16 +84,13 @@ typedef struct {
 } AudioContext;
 static AudioContext audioCtx = {0};
 
-// Opus
 static OpusEncoder *opusEnc = NULL;
 static OpusDecoder *opusDec = NULL;
 
-// Local
 static char myAddress[MAX_ADDR_STR] = {0};
 static int myPort = DEFAULT_PORT;
 static bool isRunning = true;
 
-// Forward declarations
 static void signalHandler(int sig);
 static void getOwnIPAddress(void);
 static int verifyCert(int pre, X509_STORE_CTX *ctx);
@@ -130,20 +123,15 @@ static void announceSelf(void);
 
 // Large per-coroutine buffers (heap allocated once)
 static unsigned char *netBuf = NULL; // MAX_PACKET_SIZE
-static float *fbuf = NULL;                     // FRAME_SIZE
-static opus_int16 *pcmBuf = NULL;        // FRAME_SIZE
+static float *fbuf = NULL;           // FRAME_SIZE
+static opus_int16 *pcmBuf = NULL;    // FRAME_SIZE
 
-//--------------------------------------------------------------------------------------
-// main
-//--------------------------------------------------------------------------------------
 int main(int argc, char **argv) {
     int port = DEFAULT_PORT;
 
-    // peer slots
     initializePeers();
     coroutine_init();
 
-    // parse args
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-p") && i + 1 < argc) {
             port = atoi(argv[++i]);
@@ -165,21 +153,16 @@ int main(int argc, char **argv) {
         }
     }
 
-    // ctrl-c
     signal(SIGINT, signalHandler);
 
-    // own IP
     getOwnIPAddress();
 
-    // SSL
     if (!setupSSL())
         return 1;
 
-    // Audio
     if (!initAudioDevice())
         return 1;
 
-    // Opus
     {
         int err;
         opusEnc = opus_encoder_create(SAMPLE_RATE, OPUS_CHANNELS, OPUS_APPLICATION_VOIP, &err);
@@ -187,16 +170,13 @@ int main(int argc, char **argv) {
         opus_encoder_ctl(opusEnc, OPUS_SET_BITRATE(64000));
     }
 
-    // server + discovery
     if (!startServer(port))
         return 1;
 
-    // coroutines
     coroutine_go(acceptConnectionCoroutine, NULL);
     coroutine_go(discoveryCoroutine, NULL);
     announceSelf();
 
-    // main loop
     while (isRunning) {
         processAudioIO();
         updateAudioLevels();
@@ -216,7 +196,6 @@ int main(int argc, char **argv) {
         usleep(10000);
     }
 
-    // cleanup
     cleanupSSL();
     cleanupAudioDevice();
     opus_encoder_destroy(opusEnc);
@@ -229,17 +208,11 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-//--------------------------------------------------------------------------------------
-// handle Ctrl-C
-//--------------------------------------------------------------------------------------
 static void signalHandler(int sig) {
     (void)sig;
     isRunning = false;
 }
 
-//--------------------------------------------------------------------------------------
-// find a non-loopback IPv4
-//--------------------------------------------------------------------------------------
 static void getOwnIPAddress(void) {
     struct ifaddrs *ifp, *ifa;
     if (getifaddrs(&ifp) == -1) {
@@ -263,9 +236,6 @@ static void getOwnIPAddress(void) {
     fprintf(stderr, "[INFO] Local IP: %s\n", myAddress);
 }
 
-//--------------------------------------------------------------------------------------
-// SSL: accept self-signed
-//--------------------------------------------------------------------------------------
 static int verifyCert(int pre, X509_STORE_CTX *ctx) {
     (void)pre;
     (void)ctx;
@@ -320,15 +290,11 @@ static void cleanupSSL(void) {
     EVP_cleanup();
 }
 
-//--------------------------------------------------------------------------------------
-// miniaudio callback: capture→ring, ring→playback
-//--------------------------------------------------------------------------------------
 static void ma_callback(ma_device *dev, void *out_, const void *in_,
                                                 ma_uint32 frameCount) {
     AudioContext *ctx = (AudioContext *)dev->pUserData;
     size_t bytes = frameCount * sizeof(float);
 
-    // 1) CAPTURE half (called when in_ != NULL)
     if (in_) {
         const float *src = (const float *)in_;
         ma_uint32 wAvail = ma_rb_available_write(&ctx->captureRB);
@@ -352,7 +318,6 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_,
         }
     }
 
-    // 2) PLAYBACK half (called when out_ != NULL)
     if (out_) {
         float *dst = (float *)out_;
         ma_uint32 rAvail = ma_rb_available_read(&ctx->playbackRB);
@@ -380,9 +345,6 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_,
     }
 }
 
-//--------------------------------------------------------------------------------------
-// init audio device + rings
-//--------------------------------------------------------------------------------------
 static bool initAudioDevice(void) {
     ma_uint32 cap = SAMPLE_RATE; // 1s
     size_t bytes = cap * sizeof(float);
@@ -417,7 +379,6 @@ static bool initAudioDevice(void) {
     }
     fprintf(stderr, "[INFO] Audio @ %d Hz\n", SAMPLE_RATE);
 
-    // allocate static buffers
     netBuf = malloc(MAX_PACKET_SIZE);
     fbuf = malloc(FRAME_SIZE * sizeof(float));
     pcmBuf = malloc(FRAME_SIZE * sizeof(opus_int16));
@@ -432,9 +393,6 @@ static void cleanupAudioDevice(void) {
     free(audioCtx.playbackBufferData);
 }
 
-//--------------------------------------------------------------------------------------
-// init peer slots
-//--------------------------------------------------------------------------------------
 static void initializePeers(void) {
     for (int i = 0; i < MAX_PEERS; i++) {
         netState.peers[i].state = PEER_DISCONNECTED;
@@ -445,9 +403,6 @@ static void initializePeers(void) {
     netState.peerCount = 0;
 }
 
-//--------------------------------------------------------------------------------------
-// start TCP+UDP
-//--------------------------------------------------------------------------------------
 static bool startServer(int port) {
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
@@ -495,9 +450,6 @@ static bool startServer(int port) {
     return true;
 }
 
-//--------------------------------------------------------------------------------------
-// accept connections
-//--------------------------------------------------------------------------------------
 static void acceptConnectionCoroutine(void *arg) {
     (void)arg;
     while (isRunning) {
@@ -525,6 +477,7 @@ static void acceptConnectionCoroutine(void *arg) {
         inet_ntop(AF_INET, &ca.sin_addr, p->address, MAX_ADDR_STR);
         p->port = ntohs(ca.sin_port);
         p->socketFd = cfd;
+        p->isClient   = false;
         p->state = PEER_CONNECTING;
         p->lastActivity = time(NULL);
         fprintf(stderr, "[IN] TCP %s:%d\n", p->address, p->port);
@@ -534,12 +487,10 @@ static void acceptConnectionCoroutine(void *arg) {
     }
 }
 
-//--------------------------------------------------------------------------------------
-// connect out
-//--------------------------------------------------------------------------------------
 static void connectToPeerCoroutine(void *arg) {
     Peer *p = (Peer *)arg;
-    p->state = PEER_CONNECTING;
+    p->isClient   = true;
+    p->state      = PEER_CONNECTING;
     p->lastActivity = time(NULL);
     p->socketFd = socket(AF_INET, SOCK_STREAM, 0);
     fcntl(p->socketFd, F_SETFL, fcntl(p->socketFd, F_GETFL, 0) | O_NONBLOCK);
@@ -579,7 +530,7 @@ static void connectToPeerCoroutine(void *arg) {
     };
     SSL_write(p->ssl, hello, sizeof(hello));
 
-    p->state = PEER_CONNECTED;
+    p->state      = PEER_CONNECTED;
     netState.peerCount++;
     coroutine_go(handlePeerCoroutine, p);
     return;
@@ -591,92 +542,131 @@ fail:
     p->state = PEER_DISCONNECTED;
 }
 
-//--------------------------------------------------------------------------------------
-// handle peer I/O
-//--------------------------------------------------------------------------------------
 static void handlePeerCoroutine(void *arg) {
   Peer *p = (Peer *)arg;
 
-  while (1) {
-    int r = SSL_accept(p->ssl);
-    if (r > 0) {
-      break;
+  if (p->isClient) {
+    // client side
+    while (1) {
+      int r = SSL_connect(p->ssl);
+      if (r > 0) {
+        break;  // handshake complete
+      }
+      int e = SSL_get_error(p->ssl, r);
+      if (e == SSL_ERROR_WANT_READ) {
+        coroutine_sleep_read(p->socketFd);
+      } else if (e == SSL_ERROR_WANT_WRITE) {
+        coroutine_sleep_write(p->socketFd);
+      } else {
+        goto cleanup;
+      }
     }
-    int e = SSL_get_error(p->ssl, r);
-    if (e == SSL_ERROR_WANT_READ) {
-      coroutine_sleep_read(p->socketFd);
-    } else if (e == SSL_ERROR_WANT_WRITE) {
-      coroutine_sleep_write(p->socketFd);
-    } else {
-      goto cleanup;
+
+    {
+      unsigned char hello[3] = {
+        PACKET_HELLO,
+        (unsigned char)((myPort >> 8) & 0xFF),
+        (unsigned char)( myPort        & 0xFF)
+      };
+      SSL_write(p->ssl, hello, sizeof(hello));
+    }
+
+  } else {
+    // server side
+    while (1) {
+      int r = SSL_accept(p->ssl);
+      if (r > 0) {
+        break;  // handshake complete
+      }
+      int e = SSL_get_error(p->ssl, r);
+      if (e == SSL_ERROR_WANT_READ) {
+        coroutine_sleep_read(p->socketFd);
+      } else if (e == SSL_ERROR_WANT_WRITE) {
+        coroutine_sleep_write(p->socketFd);
+      } else {
+        goto cleanup;
+      }
     }
   }
 
-  p->state = PEER_CONNECTED;
-  netState.peerCount++;
-
-  unsigned char buf[3];
-  int n;
-  while (1) {
-    n = SSL_read(p->ssl, buf, sizeof(buf));
-    if (n > 0) {
-      break;
-    }
-    int e = SSL_get_error(p->ssl, n);
-    if (e == SSL_ERROR_WANT_READ) {
-      coroutine_sleep_read(p->socketFd);
-    } else if (e == SSL_ERROR_WANT_WRITE) {
-      coroutine_sleep_write(p->socketFd);
-    } else {
-      goto cleanup;
-    }
+  if (p->state != PEER_CONNECTED) {
+    p->state = PEER_CONNECTED;
+    netState.peerCount++;
   }
 
-  if (n == 3 && buf[0] == PACKET_HELLO) {
+  {
+    unsigned char buf[3];
+    int n;
+    do {
+      n = SSL_read(p->ssl, buf, sizeof(buf));
+      if (n > 0) {
+        break;
+      }
+      int e = SSL_get_error(p->ssl, n);
+      if (e == SSL_ERROR_WANT_READ) {
+        coroutine_sleep_read(p->socketFd);
+      } else if (e == SSL_ERROR_WANT_WRITE) {
+        coroutine_sleep_write(p->socketFd);
+      } else {
+        goto cleanup;
+      }
+    } while (1);
+
+    if (n != 3 || buf[0] != PACKET_HELLO) {
+      goto cleanup;
+    }
+
     int theirPort = (buf[1] << 8) | buf[2];
-    if (isPeerConnected(p->address, theirPort)) {
+
+    if (!p->isClient && isPeerConnected(p->address, theirPort)) {
       goto cleanup;
     }
     p->port = theirPort;
 
-    unsigned char ack[3] = {
-      PACKET_HELLO_ACK,
-      (unsigned char)((myPort >> 8) & 0xFF),
-      (unsigned char)(myPort & 0xFF)
-    };
-    SSL_write(p->ssl, ack, sizeof(ack));
+    {
+      unsigned char ack[3] = {
+        PACKET_HELLO_ACK,
+        (unsigned char)((myPort >> 8) & 0xFF),
+        (unsigned char)( myPort        & 0xFF)
+      };
+      SSL_write(p->ssl, ack, sizeof(ack));
+    }
 
     sendPeerList(p);
   }
 
   while (isRunning) {
     coroutine_sleep_read(p->socketFd);
-    n = SSL_read(p->ssl, buf, MAX_PACKET_SIZE);
-    if (n <= 0) {
-      int e = SSL_get_error(p->ssl, n);
+
+    unsigned char pkt[MAX_PACKET_SIZE];
+    int len = SSL_read(p->ssl, pkt, sizeof(pkt));
+    if (len <= 0) {
+      int e = SSL_get_error(p->ssl, len);
       if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
         continue;
       }
-      break;
+      break;  // real error or EOF
     }
-    p->lastActivity = time(NULL);
-    p->bytesReceived += n;
 
-    switch (buf[0]) {
+    p->lastActivity   = time(NULL);
+    p->bytesReceived += len;
+
+    switch (pkt[0]) {
       case PACKET_AUDIO: {
-        int frames = opus_decode(opusDec, buf + 1, n - 1,
+        int frames = opus_decode(opusDec, pkt + 1, len - 1,
                                  pcmBuf, FRAME_SIZE, 0);
         if (frames > 0) {
           for (int i = 0; i < frames; i++) {
             fbuf[i] = pcmBuf[i] / 32767.0f;
           }
           p->audioLevel    = calculateRMS(fbuf, frames);
-          p->audioDetected = p->audioLevel > 0.01f;
+          p->audioDetected = (p->audioLevel > 0.01f);
 
-          size_t wS;
+          size_t  wS;
           void   *wP;
-          if (ma_rb_acquire_write(&audioCtx.playbackRB, &wS,
-                                  &wP) == MA_SUCCESS) {
+          if (ma_rb_acquire_write(
+                &audioCtx.playbackRB, &wS, &wP) == MA_SUCCESS)
+          {
             size_t b = frames * sizeof(float);
             if (wS >= b) {
               memcpy(wP, fbuf, b);
@@ -689,7 +679,7 @@ static void handlePeerCoroutine(void *arg) {
       } break;
 
       case PACKET_PEER_LIST:
-        handlePeerList(p, (char *)buf + 1, n - 1);
+        handlePeerList(p, (char *)pkt + 1, len - 1);
         break;
 
       default:
@@ -713,9 +703,6 @@ cleanup:
   }
 }
 
-//--------------------------------------------------------------------------------------
-// discovery
-//--------------------------------------------------------------------------------------
 static void discoveryCoroutine(void *arg) {
     (void)arg;
     struct sockaddr_in sa;
@@ -756,9 +743,6 @@ static void discoveryCoroutine(void *arg) {
     }
 }
 
-//--------------------------------------------------------------------------------------
-// audio I/O
-//--------------------------------------------------------------------------------------
 static void processAudioIO(void) {
     ma_uint32 avail = ma_rb_available_read(&audioCtx.captureRB);
     if (avail < FRAME_SIZE * sizeof(float)) {
@@ -804,9 +788,6 @@ static void processAudioIO(void) {
         broadcastAudioToPeers(netBuf, nb + 1);
 }
 
-//--------------------------------------------------------------------------------------
-// broadcast
-//--------------------------------------------------------------------------------------
 static void broadcastAudioToPeers(const unsigned char *data, int sz) {
     for (int i = 0; i < MAX_PEERS; i++) {
         Peer *p = &netState.peers[i];
@@ -818,9 +799,6 @@ static void broadcastAudioToPeers(const unsigned char *data, int sz) {
     }
 }
 
-//--------------------------------------------------------------------------------------
-// update levels & timeout
-//--------------------------------------------------------------------------------------
 static void updateAudioLevels(void) {
     for (int i = 0; i < MAX_PEERS; i++) {
         Peer *p = &netState.peers[i];
@@ -839,9 +817,6 @@ static void updateAudioLevels(void) {
     }
 }
 
-//--------------------------------------------------------------------------------------
-// visualization
-//--------------------------------------------------------------------------------------
 static void drawVisualization(void) {
     printf("\033[2J\033[H");
     printf("=== Voice Chat ===\n\n");
@@ -865,9 +840,6 @@ static void drawVisualization(void) {
     fflush(stdout);
 }
 
-//--------------------------------------------------------------------------------------
-// RMS
-//--------------------------------------------------------------------------------------
 static float calculateRMS(const float *b, int n) {
     double s = 0;
     for (int i = 0; i < n; i++)
@@ -875,9 +847,6 @@ static float calculateRMS(const float *b, int n) {
     return sqrt(s / n);
 }
 
-//--------------------------------------------------------------------------------------
-// peerExists
-//--------------------------------------------------------------------------------------
 static bool isPeerConnected(const char *addr, int port) {
     for (int i = 0; i < MAX_PEERS; i++) {
         Peer *p = &netState.peers[i];
@@ -888,9 +857,6 @@ static bool isPeerConnected(const char *addr, int port) {
     return false;
 }
 
-//--------------------------------------------------------------------------------------
-// add peer
-//--------------------------------------------------------------------------------------
 static void addPeer(const char *addr, int port) {
     if (isPeerConnected(addr, port))
         return;
@@ -906,9 +872,6 @@ static void addPeer(const char *addr, int port) {
     fprintf(stderr, "[WARN] no slot %s:%d\n", addr, port);
 }
 
-//--------------------------------------------------------------------------------------
-// handle peer-list
-//--------------------------------------------------------------------------------------
 static void handlePeerList(Peer *p, const char *data, int len) {
     char *cp = malloc(len + 1);
     memcpy(cp, data, len);
@@ -929,9 +892,6 @@ static void handlePeerList(Peer *p, const char *data, int len) {
     free(cp);
 }
 
-//--------------------------------------------------------------------------------------
-// send peer-list
-//--------------------------------------------------------------------------------------
 static void sendPeerList(Peer *p) {
     char buf2[MAX_BUFFER_SIZE];
     int off = 0;
@@ -946,9 +906,6 @@ static void sendPeerList(Peer *p) {
     SSL_write(p->ssl, buf2, off);
 }
 
-//--------------------------------------------------------------------------------------
-// announce self
-//--------------------------------------------------------------------------------------
 static void announceSelf(void) {
     char msg[128];
     snprintf(msg, sizeof msg, "VOICECHAT:%s:%d", myAddress, myPort);
