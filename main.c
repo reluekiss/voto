@@ -180,13 +180,13 @@ int main(int argc, char **argv) {
         static time_t last = 0;
         time_t now = time(NULL);
         if (now - last >= 1) {
-            drawVisualization();
+            // drawVisualization();
             last = now;
         }
-        for (int i = 0; i < MAX_PEERS; i++) {
-            Peer *p = &netState.peers[i];
-            fprintf(stderr, "[DEBUG] Peer IP: %s:%d, State: %d", p->address, p->port, p->state);
-        }
+        // for (int i = 0; i < MAX_PEERS; i++) {
+        //     Peer *p = &netState.peers[i];
+        //     fprintf(stderr, "[DEBUG] Peer IP: %s:%d, State: %d\n", p->address, p->port, p->state);
+        // }
         usleep(10000);
     }
 
@@ -339,6 +339,7 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 f
             memset(dst + offsetSamples, 0, zeroBytes);
         }
     }
+    fprintf(stderr, "[D] ma_callback frameCount=%u\n", frameCount);
 }
 
 static bool initAudioDevice(void) {
@@ -662,46 +663,58 @@ static void discoveryCoroutine(void *arg) {
     }
 }
 
+static void rb_read_exact(ma_rb *rb, void *dst, size_t bytesToRead) {
+    size_t part;
+    void  *p;
+    ma_rb_acquire_read(rb, &part, &p);
+    if (part > bytesToRead) part = bytesToRead;
+    memcpy(dst, p, part);
+    ma_rb_commit_read(rb, part);
+
+    size_t rem = bytesToRead - part;
+    if (rem > 0) {
+        ma_rb_acquire_read(rb, &part, &p);
+        if (part > rem) part = rem;
+        memcpy((char *)dst + part, p, rem);
+        ma_rb_commit_read(rb, rem);
+    }
+}
+
 static void processAudioIO(void) {
-    ma_uint32 avail = ma_rb_available_read(&audioCtx.captureRB);
-    if (avail < FRAME_SIZE * sizeof(float)) {
-        static int once = 0;
-        if (!once++)
-            return;
+    ma_uint32 avail       = ma_rb_available_read(&audioCtx.captureRB);
+    size_t   frameBytes   = FRAME_SIZE * sizeof(float);
+
+    if (avail < frameBytes) {
+        return;
     }
 
-    size_t rS;
-    void *rP;
-    if (ma_rb_acquire_read(&audioCtx.captureRB, &rS, &rP) == MA_SUCCESS) {
-        size_t b = FRAME_SIZE * sizeof(float);
-        if (rS >= b) {
-            memcpy(fbuf, rP, b);
-            ma_rb_commit_read(&audioCtx.captureRB, b);
+    rb_read_exact(&audioCtx.captureRB, fbuf, frameBytes);
+
+    {
+        ma_uint32 wAvail;
+        void      *wPtr;
+        ma_rb_acquire_write(&audioCtx.playbackRB, &wAvail, &wPtr);
+        if (wAvail >= frameBytes) {
+            memcpy(wPtr, fbuf, frameBytes);
+            ma_rb_commit_write(&audioCtx.playbackRB, frameBytes);
         } else {
-            ma_rb_commit_read(&audioCtx.captureRB, 0);
-            return;
+            ma_rb_commit_write(&audioCtx.playbackRB, 0);
         }
     }
 
-    size_t wS;
-    void *wP;
-    if (ma_rb_acquire_write(&audioCtx.playbackRB, &wS, &wP) == MA_SUCCESS) {
-        size_t b = FRAME_SIZE * sizeof(float);
-        if (wS >= b) {
-            memcpy(wP, fbuf, b);
-            ma_rb_commit_write(&audioCtx.playbackRB, b);
-        } else
-            ma_rb_commit_write(&audioCtx.playbackRB, 0);
+    for (int i = 0; i < FRAME_SIZE; i++) {
+        pcmBuf[i] = (opus_int16) (fbuf[i] * 32767.0f);
     }
 
-    for (int i = 0; i < FRAME_SIZE; i++)
-        pcmBuf[i] = fbuf[i] * 32767.0f;
-
-    netBuf[0] = PACKET_AUDIO;
     int nb = opus_encode(opusEnc, pcmBuf, FRAME_SIZE, netBuf + 1, MAX_PACKET_SIZE - 1);
-    fprintf(stderr, "[DEBUG]: opus packet size: %d", nb);
-    if (nb > 0)
+
+    fprintf(stderr, "[D] opus_encode -> %d bytes\n", nb);
+    fflush(stderr);
+
+    if (nb > 0) {
+        netBuf[0] = PACKET_AUDIO;
         broadcastAudioToPeers(netBuf, nb + 1);
+    }
 }
 
 static void broadcastAudioToPeers(const unsigned char *data, int sz) {
@@ -709,8 +722,12 @@ static void broadcastAudioToPeers(const unsigned char *data, int sz) {
         Peer *p = &netState.peers[i];
         if (p->state == PEER_CONNECTED && p->ssl) {
             int w = SSL_write(p->ssl, data, sz);
-            if (w > 0)
+            if (w > 0) {
                 p->bytesSent += w;
+            } else {
+                int err = SSL_get_error(p->ssl, w);
+                fprintf(stderr, "[E] SSL_write to %s:%d -> %d (err %d)\n", p->address, p->port, w, err);
+            }
         }
     }
 }
