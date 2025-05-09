@@ -430,16 +430,13 @@ static bool startServer(int port) {
         perror("udp");
         return false;
     }
-    setsockopt(netState.discoverySocket, SOL_SOCKET, SO_REUSEADDR, &opt,
-                         sizeof opt);
-    fcntl(netState.discoverySocket, F_SETFL,
-                fcntl(netState.discoverySocket, F_GETFL, 0) | O_NONBLOCK);
+    setsockopt(netState.discoverySocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof opt);
+    fcntl(netState.discoverySocket, F_SETFL, fcntl(netState.discoverySocket, F_GETFL, 0) | O_NONBLOCK);
     if (bind(netState.discoverySocket, (void *)&da, sizeof da) < 0) {
         perror("udpb");
         return false;
     }
-    setsockopt(netState.discoverySocket, SOL_SOCKET, SO_BROADCAST, &opt,
-                         sizeof opt);
+    setsockopt(netState.discoverySocket, SOL_SOCKET, SO_BROADCAST, &opt, sizeof opt);
     fprintf(stderr, "[INFO] UDP %d\n", PEER_DISCOVERY_PORT);
     return true;
 }
