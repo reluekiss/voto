@@ -518,7 +518,7 @@ static void connectToPeerCoroutine(void *arg) {
     fprintf(stderr, "[OUT] TCP %s:%d ok\n", p->address, p->port);
     p->ssl = SSL_new(netState.ctx);
     SSL_set_fd(p->ssl, p->socketFd);
-    do {
+     while (r <= 0) {
         r = SSL_connect(p->ssl);
         if (r <= 0) {
             int e = SSL_get_error(p->ssl, r);
@@ -530,7 +530,7 @@ static void connectToPeerCoroutine(void *arg) {
                 goto fail;
             }
         }
-    } while (r <= 0);
+    }
     unsigned char hello[3] = {PACKET_HELLO, (unsigned char)((myPort >> 8) & 0xFF), (unsigned char)(myPort & 0xFF)};
     SSL_write(p->ssl, hello, sizeof(hello));
     SSL_set_mode(p->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
@@ -552,7 +552,7 @@ static void handlePeerCoroutine(void *arg) {
     while (isRunning) {
         if (p->state == PEER_CONNECTING) {
             int r;
-            do {
+            while (r <= 0) {
                 r = SSL_accept(p->ssl);
                 if (r <= 0) {
                     int e = SSL_get_error(p->ssl, r);
@@ -564,7 +564,7 @@ static void handlePeerCoroutine(void *arg) {
                         goto cleanup;
                     }
                 }
-            } while (r <= 0);
+            }
 
             p->state = PEER_CONNECTED;
             netState.peerCount++;

@@ -1,7 +1,7 @@
 CC      := gcc
-CFLAGS  := -ggdb -Os -Wall -Wextra \
+CFLAGS  := -ggdb -O2 -mavx2 -Wall -Wextra \
            -ffunction-sections -fdata-sections
-LDFLAGS := -static -lopus -lpthread -lssl -lcrypto -ldl -lm
+LDFLAGS := -lopus -lpthread -lssl -lcrypto -ldl -lm
 
 SRC     := main.c miniaudio.c
 OBJ     := $(SRC:.c=.o)
