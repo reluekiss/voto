@@ -19,9 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
-
 #include "coroutine.h"
 
 #define SAMPLE_RATE 48000
@@ -84,10 +82,15 @@ static OpusDecoder *opusDec = NULL;
 
 static char myAddress[MAX_ADDR_STR] = {0};
 static int myPort = DEFAULT_PORT;
+#define MAX_LOCAL_ADDRS 16
+static char localAddrs[MAX_LOCAL_ADDRS][MAX_ADDR_STR];
+static int  localAddrCount = 0;
+
 static bool isRunning = true;
 
 static void signalHandler(int sig);
-static void getOwnIPAddress(void);
+static void getLocalIPAddresses(void);
+static bool isLocalAddress(const char *addr);
 static int verifyCert(int pre, X509_STORE_CTX *ctx);
 static bool setupSSL(void);
 static void cleanupSSL(void);
@@ -149,7 +152,7 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, signalHandler);
 
-    getOwnIPAddress();
+    getLocalIPAddresses();
 
     if (!setupSSL())
         return 1;
@@ -216,27 +219,40 @@ static void signalHandler(int sig) {
     isRunning = false;
 }
 
-static void getOwnIPAddress(void) {
+static void getLocalIPAddresses(void) {
     struct ifaddrs *ifp, *ifa;
     if (getifaddrs(&ifp) == -1) {
         perror("getifaddrs");
         strcpy(myAddress, "127.0.0.1");
+        strcpy(localAddrs[localAddrCount++], "127.0.0.1");
         return;
     }
     for (ifa = ifp; ifa; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr)
-            continue;
-        if (ifa->ifa_addr->sa_family == AF_INET &&
-                !(ifa->ifa_flags & IFF_LOOPBACK)) {
+        if (!ifa->ifa_addr) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET) {
             struct sockaddr_in *sa = (void *)ifa->ifa_addr;
-            inet_ntop(AF_INET, &sa->sin_addr, myAddress, MAX_ADDR_STR);
-            break;
+            char buf[MAX_ADDR_STR];
+            inet_ntop(AF_INET, &sa->sin_addr, buf, MAX_ADDR_STR);
+            if (localAddrCount < MAX_LOCAL_ADDRS) {
+                strcpy(localAddrs[localAddrCount++], buf);
+            }
+            if (!(ifa->ifa_flags & IFF_LOOPBACK) && !myAddress[0]) {
+                strcpy(myAddress, buf);
+            }
         }
     }
     freeifaddrs(ifp);
-    if (!myAddress[0])
-        strcpy(myAddress, "127.0.0.1");
+    if (!myAddress[0] && localAddrCount > 0) {
+        strcpy(myAddress, localAddrs[0]);
+    }
     fprintf(stderr, "[INFO] Local IP: %s\n", myAddress);
+}
+
+static bool isLocalAddress(const char *addr) {
+    for (int i = 0; i < localAddrCount; i++) {
+        if (!strcmp(addr, localAddrs[i])) return true;
+    }
+    return false;
 }
 
 static int verifyCert(int pre, X509_STORE_CTX *ctx) {
@@ -341,6 +357,9 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32  
 static bool initAudioDevice(void) {
     size_t captureBytes  = SAMPLE_RATE * CAPTURE_CHANNELS * sizeof(float);
     size_t playbackBytes = SAMPLE_RATE * PLAYBACK_CHANNELS * sizeof(float);
+    /* enlarge ring buffers to reduce overflow under jitter */
+    captureBytes  *= 2;
+    playbackBytes *= 2;
 
     audioCtx.captureBufferData  = malloc(captureBytes);
     audioCtx.playbackBufferData = malloc(playbackBytes);
@@ -514,6 +533,7 @@ static void connectToPeerCoroutine(void *arg) {
     } while (r <= 0);
     unsigned char hello[3] = {PACKET_HELLO, (unsigned char)((myPort >> 8) & 0xFF), (unsigned char)(myPort & 0xFF)};
     SSL_write(p->ssl, hello, sizeof(hello));
+    SSL_set_mode(p->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
     p->state = PEER_CONNECTED;
     netState.peerCount++;
@@ -549,6 +569,7 @@ static void handlePeerCoroutine(void *arg) {
             p->state = PEER_CONNECTED;
             netState.peerCount++;
         }
+        SSL_set_mode(p->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
         coroutine_sleep_read(p->socketFd);
         unsigned char *nb = netBuf;
         int n = SSL_read(p->ssl, nb, MAX_PACKET_SIZE);
@@ -637,7 +658,7 @@ static void discoveryCoroutine(void *arg) {
                     int pr = atoi(c + 1);
                     char sip[MAX_ADDR_STR];
                     inet_ntop(AF_INET, &sa.sin_addr, sip, MAX_ADDR_STR);
-                    if (strcmp(sip, myAddress) == 0 && pr == myPort) {
+                    if (isLocalAddress(sip) && pr == myPort) {
                         continue;
                     }
                     if (!isPeerConnected(ipp, pr)) {
@@ -809,7 +830,7 @@ static void handlePeerList(const char *data, int len) {
             continue;
         *c = 0;
         int pr = atoi(c + 1);
-        if (strcmp(tok, myAddress) == 0 && pr == myPort) {
+        if (isLocalAddress(tok) && pr == myPort) {
             continue;
         }
         if (!isPeerConnected(tok, pr))
