@@ -33,6 +33,9 @@
 #define MAX_PEERS 16
 #define MAX_ADDR_STR 64
 
+#define BPF_LOW_CUTOFF  300.0   /* Hz */
+#define BPF_HIGH_CUTOFF 3400.0  /* Hz */
+
 typedef enum {
     PACKET_AUDIO = 0,
     PACKET_PEER_LIST = 1,
@@ -74,6 +77,8 @@ typedef struct {
     ma_rb playbackRB;
     void *captureBufferData;
     void *playbackBufferData;
+    ma_bpf2  bpf;
+    bool     bpfInitialized;
 } AudioContext;
 static AudioContext audioCtx = {0};
 
@@ -394,11 +399,27 @@ static bool initAudioDevice(void) {
     fbuf    = malloc(FRAME_SIZE * CAPTURE_CHANNELS * sizeof(float));
     pcmBuf  = malloc(FRAME_SIZE * CAPTURE_CHANNELS * sizeof(opus_int16));
     netBuf  = malloc(MAX_PACKET_SIZE);
+    {
+        double fLow  = BPF_LOW_CUTOFF;
+        double fHigh = BPF_HIGH_CUTOFF;
+        double fc    = sqrt(fLow * fHigh);
+        double Q     = fc / (fHigh - fLow);
 
+g       ma_bpf2_config bpfConfig = ma_bpf2_config_init(ma_format_f32, CAPTURE_CHANNELS, SAMPLE_RATE, fc, Q);
+        if (ma_bpf2_init(&bpfConfig, NULL, &audioCtx.bpf) != MA_SUCCESS) {
+            fprintf(stderr, "[ERR] ma_bpf2_init failed\n");
+            return false;
+        }
+        audioCtx.bpfInitialized = true;
+    }
     return true;
 }
 
 static void cleanupAudioDevice(void) {
+    if (audioCtx.bpfInitialized) {
+        ma_bpf2_uninit(&audioCtx.bpf, NULL);
+        audioCtx.bpfInitialized = false;
+    }
     ma_device_uninit(&audioCtx.device);
     ma_rb_uninit(&audioCtx.captureRB);
     ma_rb_uninit(&audioCtx.playbackRB);
@@ -551,7 +572,7 @@ static void handlePeerCoroutine(void *arg) {
     Peer *p = (Peer *)arg;
     while (isRunning) {
         if (p->state == PEER_CONNECTING) {
-            int r;
+            int r = 0;
             while (r <= 0) {
                 r = SSL_accept(p->ssl);
                 if (r <= 0) {
@@ -699,7 +720,7 @@ static void rb_read_exact(ma_rb *rb, void *dst, size_t bytesToRead) {
 }
 
 static void processAudioIO(void) {
-    size_t   frameBytes = FRAME_SIZE * CAPTURE_CHANNELS * sizeof(float);
+    size_t    frameBytes = FRAME_SIZE * CAPTURE_CHANNELS * sizeof(float);
     ma_uint32 availBytes = ma_rb_available_read(&audioCtx.captureRB);
     if (availBytes < frameBytes) {
         return;
@@ -707,9 +728,14 @@ static void processAudioIO(void) {
 
     rb_read_exact(&audioCtx.captureRB, fbuf, frameBytes);
 
+    if (audioCtx.bpfInitialized) {
+        //out+in (in-place)
+        ma_bpf2_process_pcm_frames(&audioCtx.bpf, fbuf, fbuf, FRAME_SIZE);
+    }
+
     {
         size_t   wAvail;
-        void     *wPtr;
+        void    *wPtr;
         ma_rb_acquire_write(&audioCtx.playbackRB, &wAvail, &wPtr);
         if (wAvail >= frameBytes) {
             memcpy(wPtr, fbuf, frameBytes);
