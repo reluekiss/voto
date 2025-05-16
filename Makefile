@@ -1,5 +1,5 @@
-CC      := gcc
-CFLAGS  := -ggdb -O2 -mavx2 -Wall -Wextra \
+# CC      := gcc
+CFLAGS  := -ggdb -Os -Wall -Wextra \
            -ffunction-sections -fdata-sections
 LDFLAGS := -lopus -lpthread -lssl -lcrypto -ldl -lm
 

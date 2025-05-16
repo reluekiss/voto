@@ -399,19 +399,19 @@ static bool initAudioDevice(void) {
     fbuf    = malloc(FRAME_SIZE * CAPTURE_CHANNELS * sizeof(float));
     pcmBuf  = malloc(FRAME_SIZE * CAPTURE_CHANNELS * sizeof(opus_int16));
     netBuf  = malloc(MAX_PACKET_SIZE);
-    {
-        double fLow  = BPF_LOW_CUTOFF;
-        double fHigh = BPF_HIGH_CUTOFF;
-        double fc    = sqrt(fLow * fHigh);
-        double Q     = fc / (fHigh - fLow);
 
-g       ma_bpf2_config bpfConfig = ma_bpf2_config_init(ma_format_f32, CAPTURE_CHANNELS, SAMPLE_RATE, fc, Q);
-        if (ma_bpf2_init(&bpfConfig, NULL, &audioCtx.bpf) != MA_SUCCESS) {
-            fprintf(stderr, "[ERR] ma_bpf2_init failed\n");
-            return false;
-        }
-        audioCtx.bpfInitialized = true;
+    double fLow  = BPF_LOW_CUTOFF;
+    double fHigh = BPF_HIGH_CUTOFF;
+    double fc    = sqrt(fLow * fHigh);
+    double Q     = fc / (fHigh - fLow);
+
+    ma_bpf2_config bpfConfig = ma_bpf2_config_init(ma_format_f32, CAPTURE_CHANNELS, SAMPLE_RATE, fc, Q);
+    if (ma_bpf2_init(&bpfConfig, NULL, &audioCtx.bpf) != MA_SUCCESS) {
+        fprintf(stderr, "[ERR] ma_bpf2_init failed\n");
+        return false;
     }
+    audioCtx.bpfInitialized = true;
+
     return true;
 }
 
@@ -539,7 +539,7 @@ static void connectToPeerCoroutine(void *arg) {
     fprintf(stderr, "[OUT] TCP %s:%d ok\n", p->address, p->port);
     p->ssl = SSL_new(netState.ctx);
     SSL_set_fd(p->ssl, p->socketFd);
-     while (r <= 0) {
+    do {
         r = SSL_connect(p->ssl);
         if (r <= 0) {
             int e = SSL_get_error(p->ssl, r);
@@ -551,7 +551,7 @@ static void connectToPeerCoroutine(void *arg) {
                 goto fail;
             }
         }
-    }
+    } while (r <= 0);
     unsigned char hello[3] = {PACKET_HELLO, (unsigned char)((myPort >> 8) & 0xFF), (unsigned char)(myPort & 0xFF)};
     SSL_write(p->ssl, hello, sizeof(hello));
     SSL_set_mode(p->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
@@ -572,8 +572,8 @@ static void handlePeerCoroutine(void *arg) {
     Peer *p = (Peer *)arg;
     while (isRunning) {
         if (p->state == PEER_CONNECTING) {
-            int r = 0;
-            while (r <= 0) {
+            int r;
+            do {
                 r = SSL_accept(p->ssl);
                 if (r <= 0) {
                     int e = SSL_get_error(p->ssl, r);
@@ -585,7 +585,7 @@ static void handlePeerCoroutine(void *arg) {
                         goto cleanup;
                     }
                 }
-            }
+            } while (r <= 0);
 
             p->state = PEER_CONNECTED;
             netState.peerCount++;
@@ -720,7 +720,7 @@ static void rb_read_exact(ma_rb *rb, void *dst, size_t bytesToRead) {
 }
 
 static void processAudioIO(void) {
-    size_t    frameBytes = FRAME_SIZE * CAPTURE_CHANNELS * sizeof(float);
+    size_t   frameBytes = FRAME_SIZE * CAPTURE_CHANNELS * sizeof(float);
     ma_uint32 availBytes = ma_rb_available_read(&audioCtx.captureRB);
     if (availBytes < frameBytes) {
         return;
@@ -733,16 +733,14 @@ static void processAudioIO(void) {
         ma_bpf2_process_pcm_frames(&audioCtx.bpf, fbuf, fbuf, FRAME_SIZE);
     }
 
-    {
-        size_t   wAvail;
-        void    *wPtr;
-        ma_rb_acquire_write(&audioCtx.playbackRB, &wAvail, &wPtr);
-        if (wAvail >= frameBytes) {
-            memcpy(wPtr, fbuf, frameBytes);
-            ma_rb_commit_write(&audioCtx.playbackRB, frameBytes);
-        } else {
-            ma_rb_commit_write(&audioCtx.playbackRB, 0);
-        }
+    size_t   wAvail;
+    void     *wPtr;
+    ma_rb_acquire_write(&audioCtx.playbackRB, &wAvail, &wPtr);
+    if (wAvail >= frameBytes) {
+        memcpy(wPtr, fbuf, frameBytes);
+        ma_rb_commit_write(&audioCtx.playbackRB, frameBytes);
+    } else {
+        ma_rb_commit_write(&audioCtx.playbackRB, 0);
     }
 
     int totalSamples = FRAME_SIZE * CAPTURE_CHANNELS;
