@@ -200,10 +200,12 @@ int main(int argc, char **argv) {
             drawVisualization();
             last = now;
         }
-        // for (int i = 0; i < MAX_PEERS; i++) {
-        //     Peer *p = &netState.peers[i];
-        //     fprintf(stderr, "[DEBUG] Peer IP: %s:%d, State: %d\n", p->address, p->port, p->state);
-        // }
+#ifdef DEBUG
+        for (int i = 0; i < MAX_PEERS; i++) {
+            Peer *p = &netState.peers[i];
+            fprintf(stderr, "[DEBUG] Peer IP: %s:%d, State: %d\n", p->address, p->port, p->state);
+        }
+#endif // DEBUG
         usleep(10000);
     }
 
@@ -382,6 +384,7 @@ static bool initAudioDevice(void) {
     ma_device_config cfg = ma_device_config_init(ma_device_type_duplex);
     cfg.sampleRate          = SAMPLE_RATE;
     cfg.periodSizeInFrames  = FRAME_SIZE;
+    cfg.performanceProfile  = ma_performance_profile_low_latency;
     cfg.capture.format      = ma_format_f32;
     cfg.playback.format     = ma_format_f32;
     cfg.capture.channels    = CAPTURE_CHANNELS;   // 2

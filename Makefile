@@ -14,6 +14,9 @@ all: $(TARGET)
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+debug: $(OBJ)
+	$(CC) $(CFLAGS) -o $(TARGET) $^ $(LDFLAGS)
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
