@@ -1,27 +1,39 @@
-# CC      := gcc
+CC      := gcc
 CFLAGS  := -ggdb -Os -Wall -Wextra \
            -ffunction-sections -fdata-sections
 LDFLAGS := -lopus -lpthread -lssl -lcrypto -ldl -lm
 
-SRC     := main.c miniaudio.c
-OBJ     := $(SRC:.c=.o)
+SRC_C   := main.c
+SRC_H   := miniaudio.h coroutine.h
+OBJ     := main.o miniaudio.o coroutine.o
+
 TARGET  := voto
 
-.PHONY: all ssl clean
+.PHONY: all debug ssl clean
 
 all: $(TARGET)
 
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-debug: $(OBJ)
-	$(CC) $(CFLAGS) -o $(TARGET) $^ $(LDFLAGS)
+debug: CFLAGS += -DDEBUG
+debug: $(TARGET)
 
-%.o: %.c
+main.o: main.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+miniaudio.o: miniaudio.h
+	$(CC) -x c -DMINIAUDIO_IMPLEMENTATION \
+	      $(CFLAGS) -c $< -o $@
+
+coroutine.o: coroutine.h
+	$(CC) -x c -DCOROUTINE_IMPLEMENTATION \
+	      $(CFLAGS) -c $< -o $@
+
 ssl:
-	openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/"
+	openssl req -x509 -newkey rsa:4096 \
+		-keyout key.pem -out cert.pem \
+		-days 365 -nodes -subj "/"
 
 clean:
 	rm -f *.pem $(OBJ) $(TARGET)

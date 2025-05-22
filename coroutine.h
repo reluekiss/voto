@@ -1,6 +1,5 @@
 #ifndef COROUTINE_H_
 #define COROUTINE_H_
-
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +10,24 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+typedef enum {
+    SM_NONE = 0,
+    SM_READ,
+    SM_WRITE,
+} Sleep_Mode;
+
+void __attribute__((naked)) coroutine_yield(void);
+void __attribute__((naked)) coroutine_sleep_read(int fd);
+void __attribute__((naked)) coroutine_sleep_write(int fd);
+void __attribute__((naked)) coroutine_restore_context(void *rsp);
+void coroutine_switch_context(void *rsp, Sleep_Mode sm, int fd);
+void coroutine_init(void);
+void coroutine__finish_current(void);
+void coroutine_go(void (*f)(void*), void *arg);
+size_t coroutine_id(void);
+size_t coroutine_alive(void);
+void coroutine_wake_up(size_t id);
+#ifdef COROUTINE_IMPLEMENTATION
 // TODO: make the STACK_CAPACITY customizable by the user
 //#define STACK_CAPACITY (4*1024)
 #define STACK_CAPACITY (1024*getpagesize())
@@ -76,12 +93,6 @@ static Polls polls        = {0};
 
 // TODO: ARM support
 //   Requires modifications in all the @arch places
-
-typedef enum {
-    SM_NONE = 0,
-    SM_READ,
-    SM_WRITE,
-} Sleep_Mode;
 
 // Linux x86_64 call convention
 // %rdi, %rsi, %rdx, %rcx, %r8, and %r9
@@ -288,5 +299,7 @@ void coroutine_wake_up(size_t id)
         }
     }
 }
+
+#endif // COROUTINE_IMPLEMENTATION
 
 #endif // COROUTINE_H_

@@ -230,6 +230,10 @@ int main(int argc, char **argv) {
             drawVisualization();
             last = now;
         }
+        for (int i = 0; i < MAX_PEERS; i++) {
+            Peer p = netState.peers[i];
+            fprintf(stderr, "%d: state: %d, %s:%d\n", i, p.state, p.address, p.port);
+        }
         usleep(10000);
     }
 
@@ -366,8 +370,7 @@ static void ma_callback(ma_device *dev, void *out_, const void *in_, ma_uint32 f
     AudioContext *ctx = (AudioContext*)dev->pUserData;
 
     if (in_) {
-        size_t bytesToWrite =
-            frameCount * dev->capture.channels * sizeof(float);
+        size_t bytesToWrite = frameCount * dev->capture.channels * sizeof(float);
         ma_uint32 wAvail = ma_rb_available_write(&ctx->captureRB);
         if (wAvail >= bytesToWrite) {
             void  *wPtr;
@@ -790,8 +793,7 @@ static void processAudioIO(void) {
         ma_bpf2_process_pcm_frames(&audioCtx.bpf, fbuf, fbuf, FRAME_SIZE);
     }
 
-    /* loopback to own playback */
-    {
+    /* {
         size_t   wAvail;
         void    *wPtr;
         ma_rb_acquire_write(&audioCtx.playbackRB, &wAvail, &wPtr);
@@ -801,7 +803,7 @@ static void processAudioIO(void) {
         } else {
             ma_rb_commit_write( &audioCtx.playbackRB, 0);
         }
-    }
+    } */
 
     /* float -> int16 pcm */
     int totalSamples = FRAME_SIZE * CAPTURE_CHANNELS;
@@ -837,6 +839,23 @@ static void broadcastAudioDTLS(const unsigned char *opus, int opusLen) {
             if (w > 0) {
                 p->bytesSent += w;
                 flushDTLS(p);
+            } else {
+                int err = SSL_get_error(p->dtls, w);
+                fprintf(stderr, "[ERROR] DTLS_write to %s:%d failed, err=%d\n", p->address, p->port, err);
+                
+                // Attempt to reconnect if we lose the connection
+                if (err == SSL_ERROR_ZERO_RETURN || 
+                    err == SSL_ERROR_SYSCALL || 
+                    err == SSL_ERROR_SSL) {
+                    fprintf(stderr, "[INFO] Attempting to restart DTLS connection to %s:%d\n", p->address, p->port);
+                    if (p->dtls) {
+                        SSL_shutdown(p->dtls);
+                        SSL_free(p->dtls);
+                        p->dtls = NULL;
+                    }
+                    p->dtlsConnected = false;
+                    p->dtlsStarted = false;
+                }
             }
         }
     }
@@ -918,12 +937,19 @@ static void addPeer(const char *addr, int port) {
         if (p->state == PEER_DISCONNECTED) {
             strcpy(p->address, addr);
             p->port = port;
-            memset(&p->udpAddr,0,sizeof p->udpAddr);
+            memset(&p->udpAddr, 0, sizeof p->udpAddr);
             p->udpAddr.sin_family = AF_INET;
             p->udpAddr.sin_port = htons(port);
             inet_pton(AF_INET, addr, &p->udpAddr.sin_addr);
-            p->udpAddrLen  = sizeof(p->udpAddr);
+            p->udpAddrLen = sizeof(p->udpAddr);
             p->initiator = true;
+            
+            if (strcmp(addr, "127.0.0.1") == 0 || 
+                strcmp(addr, "localhost") == 0 ||
+                isLocalAddress(addr)) {
+                fprintf(stderr, "[INFO] Local connection to %s:%d\n", addr, port);
+            }
+            
             coroutine_go(connectToPeerCoroutine, p);
             return;
         }
@@ -1041,9 +1067,13 @@ static void dtlsCoroutine(void *arg) {
             if (p->ssl && p->state == PEER_CONNECTED && !p->dtls) {
                 p->dtls = SSL_new(netState.dtlsCtx);
                 SSL_set_mtu(p->dtls, 1500);
-
-                SSL_use_certificate_file( p->dtls, "cert.pem", SSL_FILETYPE_PEM);
-                SSL_use_PrivateKey_file( p->dtls, "key.pem", SSL_FILETYPE_PEM);
+                
+                // Enable cookie exchange for DTLS and set options
+                SSL_set_options(p->dtls, SSL_OP_COOKIE_EXCHANGE);
+                SSL_set_options(p->dtls, SSL_OP_NO_QUERY_MTU);
+                
+                SSL_use_certificate_file(p->dtls, "cert.pem", SSL_FILETYPE_PEM);
+                SSL_use_PrivateKey_file(p->dtls, "key.pem", SSL_FILETYPE_PEM);
 
                 BIO *rbio = BIO_new(BIO_s_mem());
                 BIO *wbio = BIO_new(BIO_s_mem());
@@ -1057,6 +1087,13 @@ static void dtlsCoroutine(void *arg) {
 
                 p->dtlsStarted = true;
                 if (p->initiator) {
+                    SSL_do_handshake(p->dtls);
+                    flushDTLS(p);
+                }
+                
+                // Immediately try DTLS handshake again for local connections
+                if (isLocalAddress(p->address)) {
+                    fprintf(stderr, "[INFO] Initiating local DTLS handshake with %s:%d\n", p->address, p->port);
                     SSL_do_handshake(p->dtls);
                     flushDTLS(p);
                 }
@@ -1076,18 +1113,55 @@ static void dtlsCoroutine(void *arg) {
                 perror("dtls recvfrom");
                 break;
             }
+            
             /* find peer by UDP src */
             Peer *p = NULL;
+            char srcAddr[MAX_ADDR_STR];
+            inet_ntop(AF_INET, &sa.sin_addr, srcAddr, sizeof(srcAddr));
+            int srcPort = ntohs(sa.sin_port);
+            
+            // First attempt: exact match by addr and port
             for (int i = 0; i < MAX_PEERS; i++) {
                 Peer *q = &netState.peers[i];
-                if (q->dtls && al == q->udpAddrLen &&
-                    !memcmp(&q->udpAddr.sin_addr, &sa.sin_addr, sizeof sa.sin_addr) &&
-                    q->udpAddr.sin_port == sa.sin_port) {
+                if (q->dtls && 
+                    !strcmp(q->address, srcAddr) && q->port == srcPort) {
                     p = q;
                     break;
                 }
             }
-            if (!p) continue;
+            
+            // Second attempt: match by addr structure
+            if (!p) {
+                for (int i = 0; i < MAX_PEERS; i++) {
+                    Peer *q = &netState.peers[i];
+                    if (q->dtls && 
+                        al == q->udpAddrLen &&
+                        !memcmp(&q->udpAddr.sin_addr, &sa.sin_addr, sizeof(sa.sin_addr)) &&
+                        q->udpAddr.sin_port == sa.sin_port) {
+                        p = q;
+                        break;
+                    }
+                }
+            }
+
+            // Third attempt: special case for localhost
+            if (!p) {
+                if (isLocalAddress(srcAddr)) {
+                    for (int i = 0; i < MAX_PEERS; i++) {
+                        Peer *q = &netState.peers[i];
+                        if (q->dtls && isLocalAddress(q->address)) {
+                            p = q;
+                            fprintf(stderr, "[INFO] Matched local DTLS packet from %s to peer %s\n", srcAddr, q->address);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (!p) {
+                fprintf(stderr, "[WARN] Dropping DTLS packet from unknown peer %s:%d\n", srcAddr, srcPort);
+                continue;
+            }
 
             /* feed to dtls */
             BIO_write(SSL_get_rbio(p->dtls), inbuf, n);
@@ -1100,6 +1174,7 @@ static void dtlsCoroutine(void *arg) {
                     flushDTLS(p);
                     if (r == 1) {
                         p->dtlsConnected = true;
+                        fprintf(stderr, "[INFO] DTLS connected to %s:%d\n", p->address, p->port);
                         break;
                     }
                     err = SSL_get_error(p->dtls,r);
@@ -1110,6 +1185,7 @@ static void dtlsCoroutine(void *arg) {
                     err!=SSL_ERROR_WANT_READ &&
                     err!=SSL_ERROR_WANT_WRITE)
                 {
+                    fprintf(stderr, "[ERROR] DTLS handshake failed with %s:%d (err=%d)\n", p->address, p->port, err);
                     SSL_free(p->dtls);
                     p->dtls = NULL;
                 }
