@@ -798,25 +798,39 @@ static void updateAudioLevels(void) {
     }
 }
 
+uint64_t ls = 0, lr = 0, diff = 0;
 static void drawVisualization(void) {
     printf("\033[2J\033[H");
     printf("=== Voice Chat ===\n\n");
-    ma_uint32 avail = ma_rb_available_read(&audioCtx.captureRB);
-    printf("Mic ring: %4lu / %4u\n", avail / sizeof(float), SAMPLE_RATE);
+    unsigned int avail = ma_rb_available_read(&audioCtx.captureRB);
+    printf("Mic ring: %4u / %4d\n", avail / (unsigned int)sizeof(float), SAMPLE_RATE);
     printf("\nPeers: %d\n", netState.peerCount);
+    uint64_t now = (uint64_t)time(NULL);
+    uint64_t elapsed = (diff == 0 ? 1 : now - diff);
+
     for (int i = 0; i < MAX_PEERS; i++) {
         Peer *p = &netState.peers[i];
         if (p->state == PEER_CONNECTED) {
             printf("%-15s ", p->address);
-            int bar = 15, fill = p->audioLevel * bar * 5;
-            if (fill > bar)
-                fill = bar;
+            int barWidth = 15;
+            int fill = (int)(p->audioLevel * barWidth * 5);
+            if (fill > barWidth)
+                fill = barWidth;
             printf("[");
-            for (int j = 0; j < bar; j++)
+            for (int j = 0; j < barWidth; j++) {
                 putchar(j < fill ? '#' : ' ');
-            printf("] ↑%.1f↓%.1f\n", p->bytesSent / 1024.0f, p->bytesReceived / 1024.0f);
+            }
+            printf("] ");
+            float currentSentKB = p->bytesSent / 1024.0f;
+            float currentReceivedKB = p->bytesReceived / 1024.0f;
+            float sentRate = (currentSentKB - ls) / (float)elapsed;
+            float receivedRate = (currentReceivedKB - lr) / (float)elapsed;
+            printf("↑%.1f KB/s ↓%.1f KB/s\n", sentRate, receivedRate);
+            ls = currentSentKB;
+            lr = currentReceivedKB;
         }
     }
+    diff = now;
     printf("\nCtrl+C to exit\n");
     fflush(stdout);
 }
