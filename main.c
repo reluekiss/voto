@@ -230,10 +230,10 @@ int main(int argc, char **argv) {
             drawVisualization();
             last = now;
         }
-        for (int i = 0; i < MAX_PEERS; i++) {
-            Peer p = netState.peers[i];
-            fprintf(stderr, "%d: state: %d, %s:%d\n", i, p.state, p.address, p.port);
-        }
+        // for (int i = 0; i < MAX_PEERS; i++) {
+        //     Peer p = netState.peers[i];
+        //     fprintf(stderr, "%d: state: %d, %s:%d\n", i, p.state, p.address, p.port);
+        // }
         usleep(10000);
     }
 
@@ -793,7 +793,7 @@ static void processAudioIO(void) {
         ma_bpf2_process_pcm_frames(&audioCtx.bpf, fbuf, fbuf, FRAME_SIZE);
     }
 
-    /* {
+    {
         size_t   wAvail;
         void    *wPtr;
         ma_rb_acquire_write(&audioCtx.playbackRB, &wAvail, &wPtr);
@@ -803,7 +803,7 @@ static void processAudioIO(void) {
         } else {
             ma_rb_commit_write( &audioCtx.playbackRB, 0);
         }
-    } */
+    }
 
     /* float -> int16 pcm */
     int totalSamples = FRAME_SIZE * CAPTURE_CHANNELS;
