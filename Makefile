@@ -3,9 +3,9 @@ CFLAGS  := -ggdb -Os -Wall -Wextra \
            -ffunction-sections -fdata-sections
 LDFLAGS := -lopus -lpthread -lssl -lcrypto -ldl -lm
 
-SRC_C   := main.c
+SRC_C   := main.c nat_traversal.c
 SRC_H   := miniaudio.h coroutine.h
-OBJ     := main.o miniaudio.o coroutine.o
+OBJ     := main.o miniaudio.o coroutine.o nat_traversal.o
 
 TARGET  := voto
 
@@ -20,6 +20,9 @@ debug: CFLAGS += -DDEBUG
 debug: $(TARGET)
 
 main.o: main.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+nat_traversal.o: nat_traversal.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 miniaudio.o: miniaudio.h
