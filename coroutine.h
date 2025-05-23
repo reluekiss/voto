@@ -221,64 +221,94 @@ void __attribute__((naked)) coroutine_restore_context(void *rsp)
 void __attribute__((naked)) coroutine_yield(void)
 {
     asm(
-    "    str x0, [sp, #-16]!\n"        // Save x0
-    "    stp x19, x20, [sp, #-16]!\n"  // Save callee-saved registers
-    "    stp x21, x22, [sp, #-16]!\n"
-    "    stp x23, x24, [sp, #-16]!\n"
-    "    stp x25, x26, [sp, #-16]!\n"
-    "    stp x27, x28, [sp, #-16]!\n"
-    "    stp x29, x30, [sp, #-16]!\n"  // Save frame pointer and link register
-    "    mov x0, sp\n"                 // rsp -> x0
-    "    mov x1, #0\n"                 // sm = SM_NONE -> x1
-    "    mov x2, #0\n"                 // fd = 0 -> x2
-    "    b coroutine_switch_context\n");
+    "sub sp, sp, #240\n"        
+    "stp q8, q9, [sp, #0]\n"    
+    "stp q10, q11, [sp, #32]\n" 
+    "stp q12, q13, [sp, #64]\n" 
+    "stp q14, q15, [sp, #96]\n" 
+    "stp x19, x20, [sp, #128]\n"
+    "stp x21, x22, [sp, #144]\n"
+    "stp x23, x24, [sp, #160]\n"
+    "stp x25, x26, [sp, #176]\n"
+    "stp x27, x28, [sp, #192]\n"
+    "stp x29, x30, [sp, #208]\n"
+    "mov x1, x30\n"             
+    "str x30, [sp, #224]\n"     
+    "str x0, [sp, #232]\n"
+    "mov x0, sp\n"
+    "mov x1, #0\n"
+    "b coroutine_switch_context\n"
+    );
 }
 
 void __attribute__((naked)) coroutine_sleep_read(int fd)
 {
     asm(
-    "    str x0, [sp, #-16]!\n"        // Save x0 (contains fd)
-    "    stp x19, x20, [sp, #-16]!\n"  // Save callee-saved registers
-    "    stp x21, x22, [sp, #-16]!\n"
-    "    stp x23, x24, [sp, #-16]!\n"
-    "    stp x25, x26, [sp, #-16]!\n"
-    "    stp x27, x28, [sp, #-16]!\n"
-    "    stp x29, x30, [sp, #-16]!\n"  // Save frame pointer and link register
-    "    mov x2, x0\n"                 // fd -> x2
-    "    mov x0, sp\n"                 // rsp -> x0
-    "    mov x1, #1\n"                 // sm = SM_READ -> x1
-    "    b coroutine_switch_context\n");
+    "sub sp, sp, #240\n"        
+    "stp q8, q9, [sp, #0]\n"    
+    "stp q10, q11, [sp, #32]\n" 
+    "stp q12, q13, [sp, #64]\n" 
+    "stp q14, q15, [sp, #96]\n" 
+    "stp x19, x20, [sp, #128]\n"
+    "stp x21, x22, [sp, #144]\n"
+    "stp x23, x24, [sp, #160]\n"
+    "stp x25, x26, [sp, #176]\n"
+    "stp x27, x28, [sp, #192]\n"
+    "stp x29, x30, [sp, #208]\n"
+    "mov x1, x30\n"             
+    "str x30, [sp, #224]\n"     
+    "str x0, [sp, #232]\n"
+    "mov x2, x0\n"
+    "mov x0, sp\n"
+    "mov x1, #1\n"
+    "b coroutine_switch_context\n"
+    );
 }
 
 void __attribute__((naked)) coroutine_sleep_write(int fd)
 {
     asm(
-    "    str x0, [sp, #-16]!\n"        // Save x0 (contains fd)
-    "    stp x19, x20, [sp, #-16]!\n"  // Save callee-saved registers
-    "    stp x21, x22, [sp, #-16]!\n"
-    "    stp x23, x24, [sp, #-16]!\n"
-    "    stp x25, x26, [sp, #-16]!\n"
-    "    stp x27, x28, [sp, #-16]!\n"
-    "    stp x29, x30, [sp, #-16]!\n"  // Save frame pointer and link register
-    "    mov x2, x0\n"                 // fd -> x2
-    "    mov x0, sp\n"                 // rsp -> x0
-    "    mov x1, #2\n"                 // sm = SM_WRITE -> x1
-    "    b coroutine_switch_context\n");
+    "sub sp, sp, #240\n"        
+    "stp q8, q9, [sp, #0]\n"    
+    "stp q10, q11, [sp, #32]\n" 
+    "stp q12, q13, [sp, #64]\n" 
+    "stp q14, q15, [sp, #96]\n" 
+    "stp x19, x20, [sp, #128]\n"
+    "stp x21, x22, [sp, #144]\n"
+    "stp x23, x24, [sp, #160]\n"
+    "stp x25, x26, [sp, #176]\n"
+    "stp x27, x28, [sp, #192]\n"
+    "stp x29, x30, [sp, #208]\n"
+    "mov x1, x30\n"             
+    "str x30, [sp, #224]\n"     
+    "str x0, [sp, #232]\n"
+    "mov x2, x0\n" 
+    "mov x0, sp\n"
+    "mov x1, #2\n"
+    "b coroutine_switch_context\n"
+    );
 }
 
 void __attribute__((naked)) coroutine_restore_context(void *rsp)
 {
     asm(
-    "    mov sp, x0\n"                 // Restore stack pointer
-    "    ldp x29, x30, [sp], #16\n"    // Restore frame pointer and link register
-    "    ldp x27, x28, [sp], #16\n"    // Restore callee-saved registers
-    "    ldp x25, x26, [sp], #16\n"
-    "    ldp x23, x24, [sp], #16\n"
-    "    ldp x21, x22, [sp], #16\n"
-    "    ldp x19, x20, [sp], #16\n"
-    "    ldr x0, [sp], #16\n"          // Restore x0
-    "    ldr x30, [sp], #8\n"          // Pop return address into link register
-    "    ret\n");                      // Jump to return address
+    "mov sp, x0\n"              
+    "ldp q8, q9, [sp, #0]\n"    
+    "ldp q10, q11, [sp, #32]\n" 
+    "ldp q12, q13, [sp, #64]\n" 
+    "ldp q14, q15, [sp, #96]\n" 
+    "ldp x19, x20, [sp, #128]\n"
+    "ldp x21, x22, [sp, #144]\n"
+    "ldp x23, x24, [sp, #160]\n"
+    "ldp x25, x26, [sp, #176]\n"
+    "ldp x27, x28, [sp, #192]\n"
+    "ldp x29, x30, [sp, #208]\n"
+    "mov x1, x30\n"             
+    "ldr x30, [sp, #224]\n"     
+    "ldr x0, [sp, #232]\n"      
+    "add sp, sp, #240\n"        
+    "ret x1\n"
+    );
 }
 
 #else
@@ -384,8 +414,8 @@ void coroutine_go(void (*f)(void*), void *arg)
 
     void **rsp = (void**)((char*)contexts.items[id].stack_base + STACK_CAPACITY);
     
+    // stack setup
 #if defined(__x86_64__)
-    // x86_64 stack setup
     *(--rsp) = coroutine__finish_current;
     *(--rsp) = f;
     *(--rsp) = arg; // push rdi
@@ -396,24 +426,36 @@ void coroutine_go(void (*f)(void*), void *arg)
     *(--rsp) = 0;   // push r14
     *(--rsp) = 0;   // push r15
 #elif defined(__aarch64__)
-    // AArch64 stack setup, align to 16-byte boundary
-    rsp = (void**)(((uintptr_t)rsp) & ~(uintptr_t)0xF);
-    
-    *(--rsp) = coroutine__finish_current; // Return address for function f
-    *(--rsp) = f;                         // Return address for coroutine_restore_context
-    *(--rsp) = 0;                         // x30 (link register) - placeholder
-    *(--rsp) = 0;                         // x29 (frame pointer) 
-    *(--rsp) = 0;                         // x28
-    *(--rsp) = 0;                         // x27
-    *(--rsp) = 0;                         // x26
-    *(--rsp) = 0;                         // x25
-    *(--rsp) = 0;                         // x24
-    *(--rsp) = 0;                         // x23
-    *(--rsp) = 0;                         // x22
-    *(--rsp) = 0;                         // x21
-    *(--rsp) = 0;                         // x20
-    *(--rsp) = 0;                         // x19
-    *(--rsp) = arg;                       // x0 (first argument)
+    *(--rsp) = arg;
+    *(--rsp) = coroutine__finish_current;
+    *(--rsp) = f; // push r0
+    *(--rsp) = 0; // push r29
+    *(--rsp) = 0; // push r28
+    *(--rsp) = 0; // push r27
+    *(--rsp) = 0; // push r26
+    *(--rsp) = 0; // push r25
+    *(--rsp) = 0; // push r24
+    *(--rsp) = 0; // push r23
+    *(--rsp) = 0; // push r22
+    *(--rsp) = 0; // push r21
+    *(--rsp) = 0; // push r20
+    *(--rsp) = 0; // push r19
+    *(--rsp) = 0; // push v15
+    *(--rsp) = 0;
+    *(--rsp) = 0; // push v14
+    *(--rsp) = 0;
+    *(--rsp) = 0; // push v13
+    *(--rsp) = 0;
+    *(--rsp) = 0; // push v12
+    *(--rsp) = 0;
+    *(--rsp) = 0; // push v11
+    *(--rsp) = 0;
+    *(--rsp) = 0; // push v10
+    *(--rsp) = 0;
+    *(--rsp) = 0; // push v09
+    *(--rsp) = 0;
+    *(--rsp) = 0; // push v08
+    *(--rsp) = 0;
 #endif
     
     contexts.items[id].rsp = rsp;
