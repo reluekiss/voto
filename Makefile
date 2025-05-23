@@ -1,7 +1,7 @@
 CC      := clang
 CFLAGS  := -ggdb -Os -Wall -Wextra \
            -ffunction-sections -fdata-sections
-LDFLAGS := -lopus -lpthread -lssl -lcrypto -ldl -lm
+LDFLAGS := -lopus -lpthread -lssl -lcrypto -ldl -lm -Wl,--gc-sections
 
 SRC_C   := main.c nat_traversal.c
 SRC_H   := miniaudio.h coroutine.h
