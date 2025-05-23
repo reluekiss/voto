@@ -4,32 +4,79 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 #include <poll.h>
 #include <unistd.h>
 #include <sys/mman.h>
+// # What is a Coroutine?
+//
+// Coroutine is a lightweight user space thread with its own stack that can
+// suspend its execution and switch to another coroutine (see coroutine_yield()
+// function). Coroutines do not run in parallel but rather cooperatively switch
+// between each other whenever they feel like it.
+//
+// Coroutines are useful in cases when all your program does majority of the
+// time is waiting on IO. So with coroutines you have an opportunity to do
+// coroutine_yield() and go do something else. It is not useful to split up
+// heavy CPU computations because they all going to be executed on a single
+// thread. Use proper threads for that (pthreads on POSIX).
+//
+// Good use cases for coroutines are usually Network Applications and UI.
+// Anything with a slow Async IO.
+//
+// # How does it work?
+//
+// Each coroutine has its own separate call stack. Every time a new coroutine is
+// created with coroutine_go() a new call stack is allocated in dynamic memory.
+// The library manages a global array of coroutine stacks and switches between
+// them (on x86_64 literally swaps out the value of the RSP register) on every
+// coroutine_yield(), coroutine_sleep_read(), or coroutine_sleep_write().
 
-typedef enum {
-    SM_NONE = 0,
-    SM_READ,
-    SM_WRITE,
-} Sleep_Mode;
+// Switch to the next coroutine. The execution will continue starting from
+// coroutine_yield() (or any other flavor of it like coroutine_sleep_read() or
+// coroutine_sleep_write) call of another coroutine.
+void coroutine_yield(void);
 
-void __attribute__((naked)) coroutine_yield(void);
-void __attribute__((naked)) coroutine_sleep_read(int fd);
-void __attribute__((naked)) coroutine_sleep_write(int fd);
-void __attribute__((naked)) coroutine_restore_context(void *rsp);
-void coroutine_switch_context(void *rsp, Sleep_Mode sm, int fd);
-void coroutine_init(void);
-void coroutine__finish_current(void);
+// Create a new coroutine. This function does not automatically switch to the
+// new coroutine, but continues executing in the current coroutine. The
+// execution of the new coroutine will start as soon as the scheduler gets to it
+// handling the chains of coroutine_yield()-s.
 void coroutine_go(void (*f)(void*), void *arg);
+
+// The id of the current coroutine.
 size_t coroutine_id(void);
+
+// How many coroutines are currently alive. Could be used by the main coroutine
+// to wait until all the "child" coroutines have died. It may also continue from
+// the call of coroutine_sleep_read() and coroutine_sleep_write() if the
+// corresponding coroutine was woken up.
 size_t coroutine_alive(void);
+
+// Put the current coroutine to sleep until the non-blocking socket `fd` has
+// avaliable data to read. Trying to read from fd after coroutine_sleep_read()
+// may still cause EAGAIN, if the coroutine was woken up by coroutine_wake_up
+// before the socket became available for reading. You may treat this function
+// as a flavor of coroutine_yield().
+void coroutine_sleep_read(int fd);
+
+// Put the current coroutine to sleep until the non-blocking socket `fd` is
+// ready to accept data to write. Trying to write to fd after
+// coroutine_sleep_write() may still cause EAGAIN, if the coroutine was woken up
+// by coroutine_wake_up before the socket became available for writing. You may
+// treat this function as a flavor of coroutine_yield().
+void coroutine_sleep_write(int fd);
+
+// Wake up coroutine by id if it is currently sleeping due to
+// coroutine_sleep_read() or coroutine_sleep_write() calls.
 void coroutine_wake_up(size_t id);
+
+// TODO: implement sleeping by timeout
+// TODO: add timeouts to coroutine_sleep_read() and coroutine_sleep_write()
+
 #ifdef COROUTINE_IMPLEMENTATION
-// TODO: make the STACK_CAPACITY customizable by the user
-//#define STACK_CAPACITY (4*1024)
+// just use undef and redef this for custom values
 #define STACK_CAPACITY (1024*getpagesize())
 
 // Initial capacity of a dynamic array
@@ -83,6 +130,13 @@ typedef struct {
     size_t capacity;
 } Polls;
 
+typedef enum {
+    SM_NONE = 0,
+    SM_READ,
+    SM_WRITE,
+} Sleep_Mode;
+
+
 // TODO: coroutines library probably does not work well in multithreaded environment
 static size_t current     = 0;
 static Indices active     = {0};
@@ -91,15 +145,12 @@ static Contexts contexts  = {0};
 static Indices asleep     = {0};
 static Polls polls        = {0};
 
-// TODO: ARM support
-//   Requires modifications in all the @arch places
-
+#if defined(__x86_64__)
 // Linux x86_64 call convention
 // %rdi, %rsi, %rdx, %rcx, %r8, and %r9
 
 void __attribute__((naked)) coroutine_yield(void)
 {
-    // @arch
     asm(
     "    pushq %rdi\n"
     "    pushq %rbp\n"
@@ -115,8 +166,6 @@ void __attribute__((naked)) coroutine_yield(void)
 
 void __attribute__((naked)) coroutine_sleep_read(int fd)
 {
-    (void) fd;
-    // @arch
     asm(
     "    pushq %rdi\n"
     "    pushq %rbp\n"
@@ -133,8 +182,6 @@ void __attribute__((naked)) coroutine_sleep_read(int fd)
 
 void __attribute__((naked)) coroutine_sleep_write(int fd)
 {
-    (void) fd;
-    // @arch
     asm(
     "    pushq %rdi\n"
     "    pushq %rbp\n"
@@ -151,8 +198,6 @@ void __attribute__((naked)) coroutine_sleep_write(int fd)
 
 void __attribute__((naked)) coroutine_restore_context(void *rsp)
 {
-    // @arch
-    (void)rsp;
     asm(
     "    movq %rdi, %rsp\n"
     "    popq %r15\n"
@@ -164,6 +209,81 @@ void __attribute__((naked)) coroutine_restore_context(void *rsp)
     "    popq %rdi\n"
     "    ret\n");
 }
+
+#elif defined(__aarch64__)
+// AArch64 calling convention
+// x0-x7: argument/return registers (caller-saved)
+// x9-x15: temporary registers (caller-saved)  
+// x19-x28: callee-saved registers
+// x29: frame pointer (FP)
+// x30: link register (LR)
+
+void __attribute__((naked)) coroutine_yield(void)
+{
+    asm(
+    "    str x0, [sp, #-16]!\n"        // Save x0
+    "    stp x19, x20, [sp, #-16]!\n"  // Save callee-saved registers
+    "    stp x21, x22, [sp, #-16]!\n"
+    "    stp x23, x24, [sp, #-16]!\n"
+    "    stp x25, x26, [sp, #-16]!\n"
+    "    stp x27, x28, [sp, #-16]!\n"
+    "    stp x29, x30, [sp, #-16]!\n"  // Save frame pointer and link register
+    "    mov x0, sp\n"                 // rsp -> x0
+    "    mov x1, #0\n"                 // sm = SM_NONE -> x1
+    "    mov x2, #0\n"                 // fd = 0 -> x2
+    "    b coroutine_switch_context\n");
+}
+
+void __attribute__((naked)) coroutine_sleep_read(int fd)
+{
+    asm(
+    "    str x0, [sp, #-16]!\n"        // Save x0 (contains fd)
+    "    stp x19, x20, [sp, #-16]!\n"  // Save callee-saved registers
+    "    stp x21, x22, [sp, #-16]!\n"
+    "    stp x23, x24, [sp, #-16]!\n"
+    "    stp x25, x26, [sp, #-16]!\n"
+    "    stp x27, x28, [sp, #-16]!\n"
+    "    stp x29, x30, [sp, #-16]!\n"  // Save frame pointer and link register
+    "    mov x2, x0\n"                 // fd -> x2
+    "    mov x0, sp\n"                 // rsp -> x0
+    "    mov x1, #1\n"                 // sm = SM_READ -> x1
+    "    b coroutine_switch_context\n");
+}
+
+void __attribute__((naked)) coroutine_sleep_write(int fd)
+{
+    asm(
+    "    str x0, [sp, #-16]!\n"        // Save x0 (contains fd)
+    "    stp x19, x20, [sp, #-16]!\n"  // Save callee-saved registers
+    "    stp x21, x22, [sp, #-16]!\n"
+    "    stp x23, x24, [sp, #-16]!\n"
+    "    stp x25, x26, [sp, #-16]!\n"
+    "    stp x27, x28, [sp, #-16]!\n"
+    "    stp x29, x30, [sp, #-16]!\n"  // Save frame pointer and link register
+    "    mov x2, x0\n"                 // fd -> x2
+    "    mov x0, sp\n"                 // rsp -> x0
+    "    mov x1, #2\n"                 // sm = SM_WRITE -> x1
+    "    b coroutine_switch_context\n");
+}
+
+void __attribute__((naked)) coroutine_restore_context(void *rsp)
+{
+    asm(
+    "    mov sp, x0\n"                 // Restore stack pointer
+    "    ldp x29, x30, [sp], #16\n"    // Restore frame pointer and link register
+    "    ldp x27, x28, [sp], #16\n"    // Restore callee-saved registers
+    "    ldp x25, x26, [sp], #16\n"
+    "    ldp x23, x24, [sp], #16\n"
+    "    ldp x21, x22, [sp], #16\n"
+    "    ldp x19, x20, [sp], #16\n"
+    "    ldr x0, [sp], #16\n"          // Restore x0
+    "    ldr x30, [sp], #8\n"          // Pop return address into link register
+    "    ret\n");                      // Jump to return address
+}
+
+#else
+    #error "Unsupported architecture. Only x86_64 and aarch64 are supported."
+#endif
 
 void coroutine_switch_context(void *rsp, Sleep_Mode sm, int fd)
 {
@@ -210,7 +330,8 @@ void coroutine_switch_context(void *rsp, Sleep_Mode sm, int fd)
     coroutine_restore_context(contexts.items[active.items[current]].rsp);
 }
 
-// TODO: think how to get rid of coroutine_init() call at all
+// No need to call this manually
+__attribute__((constructor))
 void coroutine_init(void)
 {
     if (contexts.count != 0) return;
@@ -262,18 +383,40 @@ void coroutine_go(void (*f)(void*), void *arg)
     }
 
     void **rsp = (void**)((char*)contexts.items[id].stack_base + STACK_CAPACITY);
-    // @arch
+    
+#if defined(__x86_64__)
+    // x86_64 stack setup
     *(--rsp) = coroutine__finish_current;
     *(--rsp) = f;
     *(--rsp) = arg; // push rdi
-    *(--rsp) = 0;   // push rbx
     *(--rsp) = 0;   // push rbp
+    *(--rsp) = 0;   // push rbx
     *(--rsp) = 0;   // push r12
     *(--rsp) = 0;   // push r13
     *(--rsp) = 0;   // push r14
     *(--rsp) = 0;   // push r15
+#elif defined(__aarch64__)
+    // AArch64 stack setup, align to 16-byte boundary
+    rsp = (void**)(((uintptr_t)rsp) & ~(uintptr_t)0xF);
+    
+    *(--rsp) = coroutine__finish_current; // Return address for function f
+    *(--rsp) = f;                         // Return address for coroutine_restore_context
+    *(--rsp) = 0;                         // x30 (link register) - placeholder
+    *(--rsp) = 0;                         // x29 (frame pointer) 
+    *(--rsp) = 0;                         // x28
+    *(--rsp) = 0;                         // x27
+    *(--rsp) = 0;                         // x26
+    *(--rsp) = 0;                         // x25
+    *(--rsp) = 0;                         // x24
+    *(--rsp) = 0;                         // x23
+    *(--rsp) = 0;                         // x22
+    *(--rsp) = 0;                         // x21
+    *(--rsp) = 0;                         // x20
+    *(--rsp) = 0;                         // x19
+    *(--rsp) = arg;                       // x0 (first argument)
+#endif
+    
     contexts.items[id].rsp = rsp;
-
     da_append(&active, id);
 }
 

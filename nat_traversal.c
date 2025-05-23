@@ -17,7 +17,6 @@ static HolePunchContext holePunchPeers[MAX_HOLE_PUNCH_PEERS] = {0};
 static int udpHolePunchSocket = -1;
 static bool natTraversalInitialized = false;
 
-// Forward declarations
 static bool detect_nat_type(void);
 static void get_local_ips(char ips[][64], int *count);
 static HolePunchContext* find_hole_punch_context(const char *peerAddr, int peerPort);

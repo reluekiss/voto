@@ -1,3 +1,3 @@
-fix multiple instances of self
+Dependencies are opus and SSL.
 
-think of a way to keep a table of uid's vs addresses so that people don't need to type ip addresses every time and can try to connect to any number of known peers and upon failure can ask another member of the mesh to update the wrong information
+Only works on x86_64 (coroutine.h) linux. Use of musl is encouraged.

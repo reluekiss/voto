@@ -133,7 +133,6 @@ int main(int argc, char **argv) {
     int port = DEFAULT_PORT;
 
     initializePeers();
-    coroutine_init();
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-p") && i + 1 < argc) {

@@ -1,4 +1,4 @@
-CC      := gcc
+CC      := clang
 CFLAGS  := -ggdb -Os -Wall -Wextra \
            -ffunction-sections -fdata-sections
 LDFLAGS := -lopus -lpthread -lssl -lcrypto -ldl -lm
@@ -14,7 +14,8 @@ TARGET  := voto
 all: $(TARGET)
 
 $(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CC) -flto $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	strip $(TARGET)
 
 debug: CFLAGS += -DDEBUG
 debug: $(TARGET)
